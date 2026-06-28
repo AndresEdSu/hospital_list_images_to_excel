@@ -1,0 +1,31 @@
+# Entornos y secretos
+.env
+.venv/
+
+# Cachés de Python y herramientas
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Datos sensibles y resultados generados
+data/input/images/*
+!data/input/images/.gitkeep
+data/interim/*
+!data/interim/.gitkeep
+data/output/*
+!data/output/.gitkeep
+
+# Editores y sistema operativo
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Notes
+notes.txt
