@@ -49,3 +49,11 @@ def test_one_known_surname_can_determine_two_token_order() -> None:
     assert result.first_name == "Lunara"
     assert result.last_name == "Pérez"
     assert result.confidence == 0.85
+
+
+def test_small_ocr_typo_in_name_uses_fuzzy_catalog_match() -> None:
+    result = split_full_name("Marria Pérez", LEXICONS)
+
+    assert result.reliable is True
+    assert result.first_name == "Marria"
+    assert result.last_name == "Pérez"

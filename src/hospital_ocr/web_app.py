@@ -46,6 +46,12 @@ EDITOR_COLUMNS = [
     "detalle_duplicado",
     "imagenes_origen",
     "confianza_ocr",
+    "confianza_nombre",
+    "confianza_cedula",
+    "confianza_edad",
+    "confianza_procedencia",
+    "confianza_especialidad",
+    "evidencia_extraccion",
     "linea_ocr_original",
 ]
 READ_ONLY_COLUMNS = [
@@ -54,6 +60,12 @@ READ_ONLY_COLUMNS = [
     "detalle_duplicado",
     "imagenes_origen",
     "confianza_ocr",
+    "confianza_nombre",
+    "confianza_cedula",
+    "confianza_edad",
+    "confianza_procedencia",
+    "confianza_especialidad",
+    "evidencia_extraccion",
     "linea_ocr_original",
 ]
 
@@ -123,6 +135,7 @@ def _process_uploads(
             specialties_path=PROJECT_ROOT / "config" / "especialidades.csv",
             given_names_path=PROJECT_ROOT / "config" / "nombres_comunes.csv",
             surnames_path=PROJECT_ROOT / "config" / "apellidos_comunes.csv",
+            places_path=PROJECT_ROOT / "config" / "lugares.csv",
             interim_dir=session_dir / "interim",
             output_path=session_dir / "pacientes.xlsx",
             cache_dir=PROJECT_ROOT / ".cache" / "paddlex",

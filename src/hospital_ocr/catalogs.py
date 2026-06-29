@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from hospital_ocr.models import Specialty
+from hospital_ocr.models import Place, Specialty
 from hospital_ocr.text import normalize_text
 
 
@@ -46,3 +46,16 @@ def load_specialties(path: Path) -> list[Specialty]:
             if alias and specialty:
                 specialties.append(Specialty(alias, specialty, area))
     return sorted(specialties, key=lambda item: len(item.alias), reverse=True)
+
+
+def load_places(path: Path | None) -> list[Place]:
+    if path is None or not path.exists():
+        return []
+    places: list[Place] = []
+    with path.open(encoding="utf-8-sig", newline="") as file:
+        for row in csv.DictReader(file):
+            alias = normalize_text(row.get("alias") or "")
+            name = (row.get("lugar") or "").strip()
+            if alias and name:
+                places.append(Place(alias, name))
+    return sorted(places, key=lambda item: len(item.alias), reverse=True)

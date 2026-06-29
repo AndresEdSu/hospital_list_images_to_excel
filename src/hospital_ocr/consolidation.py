@@ -81,10 +81,43 @@ def _merge_value(
     incoming: PatientRecord,
     label: str,
 ) -> None:
+    confidence_fields = {
+        "document_id": ("document_confidence", "cédula"),
+        "origin": ("origin_confidence", "procedencia"),
+        "specialty": ("specialty_confidence", "especialidad"),
+    }
     current = getattr(target, field_name)
     candidate = getattr(incoming, field_name)
     if not current and candidate:
         setattr(target, field_name, candidate)
+        if field_name in confidence_fields:
+            confidence_field, evidence_key = confidence_fields[field_name]
+            setattr(
+                target,
+                confidence_field,
+                getattr(incoming, confidence_field),
+            )
+            if incoming.field_evidence.get(evidence_key):
+                target.field_evidence[evidence_key] = (
+                    incoming.field_evidence[evidence_key]
+                )
+    elif (
+        current
+        and candidate
+        and normalize_text(str(current)) == normalize_text(str(candidate))
+        and field_name in confidence_fields
+    ):
+        confidence_field, evidence_key = confidence_fields[field_name]
+        if getattr(incoming, confidence_field) > getattr(target, confidence_field):
+            setattr(
+                target,
+                confidence_field,
+                getattr(incoming, confidence_field),
+            )
+            if incoming.field_evidence.get(evidence_key):
+                target.field_evidence[evidence_key] = (
+                    incoming.field_evidence[evidence_key]
+                )
     elif current and candidate and normalize_text(str(current)) != normalize_text(
         str(candidate)
     ):

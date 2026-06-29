@@ -35,6 +35,12 @@ class Specialty:
     area: str = ""
 
 
+@dataclass(frozen=True)
+class Place:
+    alias: str
+    name: str
+
+
 @dataclass
 class PatientRecord:
     full_name: str
@@ -62,6 +68,12 @@ class PatientRecord:
     document_id: str = ""
     review_status: str = ""
     clinical_notes: str = ""
+    name_confidence: float = 0.0
+    document_confidence: float = 0.0
+    age_confidence: float = 0.0
+    origin_confidence: float = 0.0
+    specialty_confidence: float = 0.0
+    field_evidence: dict[str, str] = field(default_factory=dict)
 
     def add_note(self, note: str) -> None:
         if note and note not in self.notes:
@@ -86,6 +98,14 @@ class PatientRecord:
         if detail and detail not in details:
             details.append(detail)
         self.duplicate_detail = "; ".join(details)
+
+    @property
+    def field_evidence_text(self) -> str:
+        return "; ".join(
+            f"{field}: {evidence}"
+            for field, evidence in self.field_evidence.items()
+            if evidence
+        )
 
 
 @dataclass(frozen=True)

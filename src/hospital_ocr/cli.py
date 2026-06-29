@@ -21,6 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--surnames", type=Path, default=Path("config/apellidos_comunes.csv")
     )
+    parser.add_argument(
+        "--places", type=Path, default=Path("config/lugares.csv")
+    )
     parser.add_argument("--interim-dir", type=Path, default=Path("data/interim"))
     parser.add_argument(
         "--output",
@@ -58,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
             specialties_path=args.specialties,
             given_names_path=args.given_names,
             surnames_path=args.surnames,
+            places_path=args.places,
             interim_dir=args.interim_dir,
             output_path=args.output,
             cache_dir=args.cache_dir,

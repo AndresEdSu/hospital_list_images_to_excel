@@ -1,5 +1,5 @@
 from hospital_ocr.consolidation import consolidate_records
-from hospital_ocr.models import OcrLine, PatientRecord, Specialty
+from hospital_ocr.models import OcrLine, PatientRecord, Place, Specialty
 from hospital_ocr.name_splitter import NameLexicons
 from hospital_ocr.parsing import detect_specialty, parse_ocr_lines
 
@@ -70,6 +70,7 @@ def test_parser_extracts_required_fields() -> None:
         LEXICONS,
         "Hospital de Prueba",
         "lista.jpg",
+        [Place("petare", "Petare")],
     )
 
     assert len(records) == 1
@@ -149,7 +150,261 @@ def test_table_parser_extracts_columns_and_keeps_plan_as_observation() -> None:
     assert records[0].origin == "Petare"
     assert records[0].specialty == ""
     assert records[0].clinical_notes == "Plan: Trauma"
+    assert "índice descartado" in records[0].field_evidence["nombre"]
     assert records[1].age is None
+
+
+def test_table_parser_uses_headers_when_columns_are_reordered() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Procedencia", 20, 70, 190),
+            table_line("Sexo", 20, 230, 290),
+            table_line("Paciente", 20, 340, 500),
+            table_line("Edad", 20, 570, 630),
+            table_line("C.I.", 20, 690, 760),
+            table_line("Servicio", 20, 820, 930),
+            table_line("Petare", 100, 80, 170),
+            table_line("F", 100, 245, 270),
+            table_line("María Pérez", 100, 350, 500),
+            table_line("38", 100, 580, 620),
+            table_line("12.345.678", 100, 680, 770),
+            table_line("Pediatría", 100, 825, 925),
+            table_line("Guarenas", 145, 75, 185),
+            table_line("M", 145, 245, 270),
+            table_line("Luis Gómez", 145, 350, 490),
+            table_line("42", 145, 580, 620),
+            table_line("9.876.543", 145, 690, 765),
+            table_line("Trauma", 145, 835, 910),
+        ],
+        [
+            Specialty("pediatria", "Pediatría", ""),
+            Specialty("trauma", "Traumatología", ""),
+        ],
+        LEXICONS,
+        "Hospital de Prueba",
+        "columnas_reordenadas.jpg",
+        [Place("petare", "Petare"), Place("guarenas", "Guarenas")],
+    )
+
+    assert [record.full_name for record in records] == [
+        "María Pérez",
+        "Luis Gómez",
+    ]
+    assert records[0].document_id == "12345678"
+    assert records[0].age == 38
+    assert records[0].sex == "F"
+    assert records[0].origin == "Petare"
+    assert records[0].specialty == "Pediatría"
+    assert records[0].document_confidence > 0.8
+    assert "encabezado" in records[0].field_evidence["cédula"]
+    assert records[1].specialty == "Traumatología"
+
+
+def test_ignored_bed_column_limits_origin_without_exporting_bed_values() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Procedencia", 20, 850, 980),
+            table_line("Cama", 20, 750, 820),
+            table_line("Servicio", 25, 580, 700),
+            table_line("Diagnóstico", 35, 500, 570),
+            table_line("Afiliación", 45, 400, 480),
+            table_line("Edad", 55, 300, 360),
+            table_line("Paciente", 75, 80, 250),
+            table_line("María Pérez", 140, 90, 250),
+            table_line("38", 140, 310, 350),
+            table_line("Trauma", 140, 590, 680),
+            table_line("620-A", 140, 760, 815),
+            table_line("Luis Gómez", 185, 90, 240),
+            table_line("42", 185, 310, 350),
+            table_line("Trauma", 185, 590, 680),
+            table_line("706", 185, 765, 810),
+            table_line("UTIA", 185, 870, 930),
+        ],
+        [Specialty("trauma", "Traumatología", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "cama_intermedia.jpg",
+    )
+
+    assert len(records) == 2
+    assert records[0].origin == ""
+    assert records[1].origin == "UTIA"
+    assert "620-A" not in records[0].observations_text
+    assert "706" not in records[1].observations_text
+
+
+def test_unknown_intermediate_header_becomes_neutral_column() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Procedencia", 20, 850, 980),
+            table_line("Código interno", 30, 720, 840),
+            table_line("Servicio", 35, 580, 700),
+            table_line("Edad", 55, 300, 360),
+            table_line("Paciente", 75, 80, 250),
+            table_line("María Pérez", 140, 90, 250),
+            table_line("38", 140, 310, 350),
+            table_line("Trauma", 140, 590, 680),
+            table_line("ZX-91", 140, 750, 820),
+            table_line("Luis Gómez", 185, 90, 240),
+            table_line("42", 185, 310, 350),
+            table_line("Trauma", 185, 590, 680),
+            table_line("AB-77", 185, 750, 820),
+            table_line("Petare", 185, 870, 940),
+        ],
+        [Specialty("trauma", "Traumatología", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "columna_desconocida.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 2
+    assert records[0].origin == ""
+    assert records[1].origin == "Petare"
+    assert "ZX-91" not in records[0].observations_text
+    assert "AB-77" not in records[1].observations_text
+
+
+def test_free_list_extracts_document_and_fuzzy_place() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría UCI", 20),
+            line("María Pérez V-12.345.678 8 años F Petarre", 100),
+        ],
+        [Specialty("pediatria uci", "Pediatría", "UCI")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_libre.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 1
+    assert records[0].full_name == "María Pérez"
+    assert records[0].document_id == "V-12345678"
+    assert records[0].age == 8
+    assert records[0].sex == "F"
+    assert records[0].origin == "Petare"
+    assert records[0].specialty == "Pediatría"
+    assert records[0].document_confidence > 0.8
+    assert records[0].origin_confidence > 0.8
+
+
+def test_free_list_does_not_treat_place_surname_as_origin() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría", 20),
+            line("María Valencia 8 años F", 100),
+        ],
+        [Specialty("pediatria", "Pediatría", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "apellido_geografico.jpg",
+        [Place("valencia", "Valencia")],
+    )
+
+    assert len(records) == 1
+    assert records[0].full_name == "María Valencia"
+    assert records[0].origin == ""
+
+
+def test_free_list_discards_index_before_extracting_name_and_age() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría", 20),
+            line("17. María Pérez 38 años F Petare", 100),
+        ],
+        [Specialty("pediatria", "Pediatría", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_numerada.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 1
+    assert records[0].full_name == "María Pérez"
+    assert records[0].age == 38
+    assert records[0].origin == "Petare"
+    assert "índice descartado" in records[0].field_evidence["nombre"]
+
+
+def test_free_list_does_not_use_lonely_index_as_age() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría", 20),
+            line("18) María Pérez F Petare", 100),
+        ],
+        [Specialty("pediatria", "Pediatría", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_sin_edad.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 1
+    assert records[0].full_name == "María Pérez"
+    assert records[0].age is None
+    assert records[0].sex == "F"
+
+
+def test_free_list_requires_catalog_match_for_origin() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría", 20),
+            line("María Pérez 8 años F Texto Libre", 100),
+        ],
+        [Specialty("pediatria", "Pediatría", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "procedencia_incierta.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 1
+    assert records[0].origin == ""
+    assert "Procedencia no reconocida" in records[0].notes
+
+
+def test_explicit_origin_column_preserves_unknown_value_for_review() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Paciente", 20, 100, 300),
+            table_line("Edad", 20, 420, 500),
+            table_line("Procedencia", 20, 650, 850),
+            table_line("María Pérez", 100, 110, 290),
+            table_line("38", 100, 430, 480),
+            table_line("Sector no catalogado", 100, 660, 840),
+            table_line("Luis Gómez", 145, 110, 280),
+            table_line("42", 145, 430, 480),
+            table_line("Otra localidad", 145, 660, 830),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "procedencia_explicita.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 2
+    assert records[0].origin == "Sector no catalogado"
+    assert "Procedencia no validada en catálogo" in records[0].notes
+
+
+def test_age_at_start_is_allowed_when_unit_is_explicit() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatría", 20),
+            line("38 años María Pérez F Petare", 100),
+        ],
+        [Specialty("pediatria", "Pediatría", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "edad_inicial.jpg",
+        [Place("petare", "Petare")],
+    )
+
+    assert len(records) == 1
+    assert records[0].full_name == "María Pérez"
+    assert records[0].age == 38
 
 
 def test_consolidation_merges_compatible_duplicates_and_keeps_evidence() -> None:

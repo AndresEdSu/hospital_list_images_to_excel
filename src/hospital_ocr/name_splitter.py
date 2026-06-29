@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from hospital_ocr.text import normalize_text
@@ -72,6 +73,33 @@ def _token_score(token: str, role: str, lexicons: NameLexicons) -> float:
         return expected
     if opposite is not None:
         return 0.0
+    if len(normalized) >= 4:
+        expected_terms = (
+            lexicons.given_names if role == "given" else lexicons.surnames
+        )
+        opposite_terms = (
+            lexicons.surnames if role == "given" else lexicons.given_names
+        )
+        expected_fuzzy = max(
+            (
+                SequenceMatcher(None, normalized, term).ratio() * weight
+                for term, weight in expected_terms.items()
+                if abs(len(term) - len(normalized)) <= 2
+            ),
+            default=0.0,
+        )
+        opposite_fuzzy = max(
+            (
+                SequenceMatcher(None, normalized, term).ratio() * weight
+                for term, weight in opposite_terms.items()
+                if abs(len(term) - len(normalized)) <= 2
+            ),
+            default=0.0,
+        )
+        if expected_fuzzy >= 0.84 and expected_fuzzy > opposite_fuzzy + 0.05:
+            return min(0.95, expected_fuzzy)
+        if opposite_fuzzy >= 0.84 and opposite_fuzzy > expected_fuzzy + 0.05:
+            return 0.10
     return 0.70
 
 

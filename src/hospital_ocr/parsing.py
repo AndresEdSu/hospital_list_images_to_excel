@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 
-from hospital_ocr.models import OcrLine, PatientRecord, Specialty
+from hospital_ocr.matching import detect_specialty, match_place
+from hospital_ocr.models import OcrLine, PatientRecord, Place, Specialty
 from hospital_ocr.name_splitter import NameLexicons, split_full_name
 from hospital_ocr.table_parser import parse_table_lines
 from hospital_ocr.text import clean_display_text, normalize_text
@@ -16,9 +16,15 @@ AGE_RE = re.compile(
     r"(?!\d)",
     re.IGNORECASE,
 )
+DOCUMENT_RE = re.compile(
+    r"(?<!\d)(?P<prefix>[VEve])?\s*[-.]?\s*"
+    r"(?P<number>\d(?:[.\-·]?\d){5,8})(?!\d)"
+)
+LEADING_INDEX_RE = re.compile(
+    r"^\s*(?P<index>\d{1,3})(?:\s*[.):\-]\s*|\s+)"
+)
 DATE_RE = re.compile(r"\b\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{2,4}\b")
 TIME_RE = re.compile(r"\b\d{1,2}\s*[:.]\s*\d{2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?\b", re.I)
-FLOOR_RE = re.compile(r"\bpiso\s*(\d+)\b", re.I)
 NON_PATIENT_PHRASES = {
     "lista actualizada",
     "hospital",
@@ -120,44 +126,6 @@ def merge_nearby_lines(
     return sorted(merged, key=lambda item: (item.center_y, item.center_x))
 
 
-def detect_specialty(
-    text: str, specialties: list[Specialty]
-) -> tuple[str, str] | None:
-    normalized = normalize_text(text)
-    if not normalized:
-        return None
-    for item in specialties:
-        if re.search(rf"(?:^|\s){re.escape(item.alias)}(?:$|\s)", normalized):
-            area = item.area
-            floor = FLOOR_RE.search(normalized)
-            if floor:
-                floor_text = f"Piso {floor.group(1)}"
-                area = f"{area} - {floor_text}" if area else floor_text
-            return item.specialty, area
-
-    candidate = re.sub(r"\b(?:piso\s*)?\d+\b", "", normalized).strip()
-    candidate_words = candidate.split()
-    for item in specialties:
-        alias_words = item.alias.split()
-        if len(item.alias) <= 3:
-            continue
-        windows = [
-            " ".join(candidate_words[index : index + len(alias_words)])
-            for index in range(max(1, len(candidate_words) - len(alias_words) + 1))
-        ]
-        ratio = max(
-            (
-                SequenceMatcher(None, window, item.alias).ratio()
-                for window in windows
-                if window
-            ),
-            default=0.0,
-        )
-        if ratio >= 0.82:
-            return item.specialty, item.area
-    return None
-
-
 def _is_metadata(text: str) -> bool:
     normalized = normalize_text(text)
     if DATE_RE.search(text) or TIME_RE.search(text):
@@ -165,13 +133,87 @@ def _is_metadata(text: str) -> bool:
     return normalized.startswith(("lista ", "actualizada ", "hora "))
 
 
-def _age_match(text: str) -> re.Match[str] | None:
+def _overlaps(span: tuple[int, int], excluded: list[tuple[int, int]]) -> bool:
+    return any(span[0] < end and start < span[1] for start, end in excluded)
+
+
+def _document_match(text: str) -> re.Match[str] | None:
+    candidates = []
+    for match in DOCUMENT_RE.finditer(text):
+        digits = re.sub(r"\D", "", match.group("number"))
+        if 6 <= len(digits) <= 9:
+            candidates.append(match)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda match: (
+            len(re.sub(r"\D", "", match.group("number"))) in {7, 8},
+            bool(match.group("prefix")),
+        ),
+    )
+
+
+def _normalized_document(match: re.Match[str] | None) -> str:
+    if match is None:
+        return ""
+    digits = re.sub(r"\D", "", match.group("number"))
+    prefix = (match.group("prefix") or "").upper()
+    return f"{prefix}-{digits}" if prefix else digits
+
+
+def _leading_index_span(text: str) -> tuple[int, int] | None:
+    match = LEADING_INDEX_RE.match(text)
+    if match is None:
+        return None
+    following = normalize_text(text[match.end() :]).split()
+    if following and following[0] in {
+        "a",
+        "ano",
+        "anos",
+        "mes",
+        "meses",
+        "dia",
+        "dias",
+    }:
+        return None
+    return match.span()
+
+
+def _strip_leading_index(text: str) -> str:
+    span = _leading_index_span(text)
+    return clean_display_text(text[span[1] :]) if span else clean_display_text(text)
+
+
+def _age_match(
+    text: str,
+    excluded: list[tuple[int, int]] | None = None,
+) -> re.Match[str] | None:
+    excluded = excluded or []
     matches = [
         match
         for match in AGE_RE.finditer(text)
         if 0 <= int(match.group("age")) <= 115
+        and not _overlaps(match.span(), excluded)
+        and not _overlaps(
+            match.span(),
+            [item.span() for item in DATE_RE.finditer(text)],
+        )
+        and not _overlaps(
+            match.span(),
+            [item.span() for item in TIME_RE.finditer(text)],
+        )
     ]
-    return matches[-1] if matches else None
+    if not matches:
+        return None
+    return max(
+        matches,
+        key=lambda match: (
+            bool(match.group("unit")),
+            match.start() > 0,
+            match.start(),
+        ),
+    )
 
 
 def _normalize_age_unit(unit: str | None) -> tuple[str, bool]:
@@ -214,10 +256,74 @@ def _heading_for_line(line: OcrLine, headings: list[Heading]) -> Heading | None:
 
 def _looks_like_missing_age_candidate(text: str) -> bool:
     normalized = normalize_text(text)
-    if any(phrase in normalized for phrase in NON_PATIENT_PHRASES):
+    if normalized in NON_PATIENT_PHRASES:
         return False
     words = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}", text)
     return 2 <= len(words) <= 6
+
+
+def _standalone_sex(
+    text: str,
+    minimum_position: int = 0,
+) -> tuple[str, tuple[int, int] | None]:
+    candidates = [
+        match
+        for match in re.finditer(r"(?<![A-Za-z])([MFH])(?![A-Za-z])", text, re.I)
+        if match.start() >= minimum_position
+    ]
+    if not candidates:
+        return "", None
+    selected = candidates[0]
+    marker = selected.group(1).upper()
+    return ("M" if marker == "H" else marker), selected.span()
+
+
+def _fallback_name_text(
+    text: str,
+    excluded: list[tuple[int, int]],
+    place_alias: str = "",
+) -> str:
+    characters = list(text)
+    for start, end in excluded:
+        for index in range(max(0, start), min(len(characters), end)):
+            characters[index] = " "
+    remaining = "".join(characters)
+    place_words = set(place_alias.split())
+    words = [
+        word
+        for word in re.findall(
+            r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}",
+            remaining,
+        )
+        if normalize_text(word)
+        not in {
+            "ano",
+            "anos",
+            "mes",
+            "meses",
+            "dia",
+            "dias",
+            "edad",
+            "cedula",
+            "ci",
+            *place_words,
+        }
+    ]
+    return clean_display_text(" ".join(words[:6]))
+
+
+def _specialty_heading(
+    line: OcrLine,
+    specialties: list[Specialty],
+) -> tuple[str, str] | None:
+    detected = detect_specialty(line.text, specialties)
+    if not detected:
+        return None
+    document = _document_match(line.text)
+    excluded = [document.span()] if document else []
+    if document or _age_match(line.text, excluded):
+        return None
+    return detected
 
 
 def parse_ocr_lines(
@@ -226,19 +332,23 @@ def parse_ocr_lines(
     name_lexicons: NameLexicons,
     center: str,
     source_image: str,
+    places: list[Place] | None = None,
 ) -> list[PatientRecord]:
+    places = places or []
     table_records = parse_table_lines(
         lines,
         name_lexicons,
         center,
         source_image,
+        specialties,
+        places,
     )
     if table_records is not None:
         return table_records
 
     probe_lines = _merge_close_lines(lines)
     probe_headings = [
-        line for line in probe_lines if detect_specialty(line.text, specialties)
+        line for line in probe_lines if _specialty_heading(line, specialties)
     ]
     width = lines[0].image_width if lines else 0
     two_columns = bool(
@@ -249,7 +359,7 @@ def parse_ocr_lines(
     headings: list[Heading] = []
     heading_ids: set[int] = set()
     for line in merged:
-        detected = detect_specialty(line.text, specialties)
+        detected = _specialty_heading(line, specialties)
         if detected:
             headings.append(Heading(line, detected[0], detected[1]))
             heading_ids.add(id(line))
@@ -259,34 +369,87 @@ def parse_ocr_lines(
         if id(line) in heading_ids or _is_metadata(line.text):
             continue
         context = _heading_for_line(line, headings)
-        age_match = _age_match(line.text)
+        index_span = _leading_index_span(line.text)
+        document_match = _document_match(line.text)
+        document_id = _normalized_document(document_match)
+        excluded = [index_span] if index_span else []
+        if document_match:
+            excluded.append(document_match.span())
+        age_match = _age_match(line.text, excluded)
+        if age_match:
+            excluded.append(age_match.span())
+        primary_field_positions = [
+            match.start()
+            for match in (document_match, age_match)
+            if match is not None
+        ]
+        sex_search_start = (
+            min(primary_field_positions)
+            if primary_field_positions
+            else index_span[1]
+            if index_span
+            else 0
+        )
+        sex, sex_span = _standalone_sex(line.text, sex_search_start)
+        if sex_span:
+            excluded.append(sex_span)
+        first_field_position = min(
+            [*primary_field_positions, sex_span[0] if sex_span else len(line.text)],
+            default=len(line.text),
+        )
+        place_probe_start = (
+            age_match.end()
+            if age_match
+            else document_match.end()
+            if document_match
+            else 0
+        )
+        place = match_place(line.text[place_probe_start:], places)
         if age_match:
             age = int(age_match.group("age"))
             age_unit, uncertain_unit = _normalize_age_unit(age_match.group("unit"))
-            name_text = clean_display_text(line.text[: age_match.start()])
-            remainder = clean_display_text(line.text[age_match.end() :])
+            name_text = _strip_leading_index(
+                line.text[:first_field_position]
+            )
+            remainder = DOCUMENT_RE.sub(" ", line.text[age_match.end() :])
+            remainder = re.sub(
+                r"^\s*[MFH]\s*(?:\b|(?=[^A-Za-z]))",
+                " ",
+                remainder,
+                flags=re.IGNORECASE,
+            )
+            remainder = clean_display_text(remainder)
         else:
             if context is None or not _looks_like_missing_age_candidate(line.text):
                 continue
             age = None
             age_unit = ""
             uncertain_unit = False
-            name_text = clean_display_text(line.text)
+            name_text = _strip_leading_index(
+                line.text[:first_field_position]
+            )
             remainder = ""
 
-        sex = ""
-        if age is None:
-            trailing_sex = re.search(
-                r"[\s(\[]+([MF])[\s)\].,;]*$", name_text, re.IGNORECASE
+        alphabetic_tokens = re.findall(
+            r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}",
+            name_text,
+        )
+        if len(alphabetic_tokens) < 2 or (
+            age is None and (index_span or place or sex_span)
+        ):
+            name_text = _fallback_name_text(
+                line.text,
+                excluded,
+                place.alias if place else "",
             )
-            if trailing_sex:
-                sex = trailing_sex.group(1).upper()
-                name_text = clean_display_text(name_text[: trailing_sex.start()])
-        sex_match = re.match(r"^\s*([MF])(?:\b|(?=[^A-Za-z]))", remainder, re.I)
-        if sex_match:
-            sex = sex_match.group(1).upper()
-            remainder = clean_display_text(remainder[sex_match.end() :])
-        origin = remainder
+        origin = place.name if place else ""
+        row_specialty = detect_specialty(line.text, specialties)
+        specialty = context.specialty if context else ""
+        area = context.area if context else ""
+        specialty_source = "membrete"
+        if not specialty and row_specialty:
+            specialty, area = row_specialty
+            specialty_source = "contenido de la fila"
 
         name_split = split_full_name(name_text, name_lexicons)
         first_name = name_split.first_name
@@ -306,12 +469,54 @@ def parse_ocr_lines(
             notes.append("Sexo no reconocido")
         if not origin:
             notes.append("Procedencia no reconocida")
-        if context is None:
+        if not specialty:
             notes.append("Especialidad o área no reconocida")
         if line.score < 0.75:
             notes.append("Baja confianza del OCR")
         if uncertain_unit:
             notes.append("Unidad de edad interpretada como años")
+
+        name_confidence = min(
+            1.0,
+            line.score * (0.75 + 0.25 * name_split.confidence),
+        )
+        document_confidence = line.score * 0.90 if document_id else 0.0
+        age_confidence = (
+            line.score * (0.95 if age_match and age_match.group("unit") else 0.75)
+            if age is not None
+            else 0.0
+        )
+        origin_confidence = (
+            line.score * place.score if place
+            else line.score * 0.45 if origin
+            else 0.0
+        )
+        specialty_confidence = line.score * 0.90 if specialty else 0.0
+        evidence = {
+            "nombre": (
+                "formato alfabético y catálogo de nombres; índice descartado"
+                if index_span
+                else "formato alfabético y catálogo de nombres"
+            ),
+            "cédula": "formato de documento" if document_id else "",
+            "edad": (
+                "formato con unidad"
+                if age_match and age_match.group("unit")
+                else "formato numérico y posición de respaldo"
+                if age is not None
+                else ""
+            ),
+            "procedencia": (
+                "catálogo geográfico"
+                if place
+                else ""
+            ),
+            "especialidad": (
+                f"catálogo de especialidades y {specialty_source}"
+                if specialty
+                else ""
+            ),
+        }
 
         records.append(
             PatientRecord(
@@ -325,13 +530,20 @@ def parse_ocr_lines(
                 age_unit=age_unit,
                 sex=sex,
                 origin=origin,
-                specialty=context.specialty if context else "",
-                area=context.area if context else "",
+                specialty=specialty,
+                area=area,
                 source_image=source_image,
                 confidence=round(line.score, 4),
                 needs_review=bool(notes),
                 notes=notes,
                 raw_line=line.text,
+                document_id=document_id,
+                name_confidence=round(name_confidence, 4),
+                document_confidence=round(document_confidence, 4),
+                age_confidence=round(age_confidence, 4),
+                origin_confidence=round(origin_confidence, 4),
+                specialty_confidence=round(specialty_confidence, 4),
+                field_evidence=evidence,
             )
         )
     return records

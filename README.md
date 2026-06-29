@@ -7,6 +7,7 @@ Pipeline local para transformar imágenes de listas hospitalarias en archivos Ex
 - `src/hospital_ocr/`: código fuente del pipeline OCR.
 - `tests/`: pruebas automatizadas.
 - `config/centros.csv`: relación entre carpetas y nombres oficiales de centros.
+- `config/lugares.csv`: equivalencias configurables de ciudades, sectores y localidades.
 - `config/especialidades.csv`: equivalencias para normalizar especialidades y áreas.
 - `config/nombres_comunes.csv`: catálogo configurable de nombres frecuentes.
 - `config/apellidos_comunes.csv`: catálogo configurable de apellidos frecuentes.
@@ -88,9 +89,12 @@ El Excel contiene:
 - `Diccionario`: significado, tipo, valores permitidos y ejemplo de cada columna.
 
 El pipeline detecta automáticamente las tablas con columnas de nombre, cédula,
-edad, sexo, procedencia y plan. Para otros diseños conserva el análisis de
-listas libres. En las tablas, `Plan` se conserva dentro de `observaciones` y no
-se interpreta automáticamente como especialidad.
+edad, sexo, procedencia, especialidad y plan. Los encabezados se comparan con
+aliases comunes y sus coordenadas se utilizan para inferir los límites y el
+orden real de las columnas. Cuando no hay encabezados confiables, se conserva
+el análisis por alineación y posición como respaldo. En las tablas, `Plan` se
+conserva dentro de `observaciones` y no se interpreta automáticamente como
+especialidad.
 
 `Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
 
@@ -106,6 +110,24 @@ En `Pacientes`, `estado_duplicado` distingue registros únicos, posibles duplica
 `edad` y `unidad_edad` se conservan por separado en las hojas internas para distinguir años, meses y días. En `Plantilla` se combinan dentro de `edad_sector`.
 
 Cada palabra de `nombre_completo` se contrasta con los catálogos de nombres y apellidos. `nombre` y `apellido` solo se completan cuando la confianza es al menos 85% y existe una diferencia clara frente a otras separaciones posibles. Los casos ambiguos quedan vacíos y pendientes de revisión.
+
+La hoja `Pacientes` incluye confianzas separadas para nombre, cédula, edad,
+procedencia y especialidad, además de la evidencia usada para clasificar cada
+campo. La confianza OCR sigue representando solamente la calidad del texto
+reconocido.
+
+Los índices iniciales de filas numeradas se descartan antes de analizar nombre
+y edad. Fuera de una columna identificada explícitamente como procedencia, un
+lugar solo se completa cuando coincide con `config/lugares.csv`; el texto
+restante no se acepta automáticamente como procedencia. Dentro de una columna
+explícita se conserva el valor desconocido, marcado para revisión.
+
+Las columnas intermedias que no forman parte de la salida, como `Cama`,
+`Afiliación` y `Diagnóstico`, se incluyen al calcular los límites de la tabla y
+luego se ignoran. También se detectan como separadores neutrales los encabezados
+desconocidos que estén geométricamente alineados con el membrete, incluso cuando
+la fotografía esté inclinada. De este modo, el contenido de una columna nueva
+no invade las columnas adyacentes que sí se exportan.
 
 `estado_revision` muestra `Pendiente` cuando el registro necesita verificación y `No requerido` cuando no presenta alertas. La separación entre nombres y apellidos, los datos ausentes y las coincidencias dudosas siempre deben revisarse antes de utilizar la hoja `Plantilla`.
 

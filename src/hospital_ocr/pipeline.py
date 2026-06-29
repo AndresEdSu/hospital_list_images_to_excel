@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from hospital_ocr.catalogs import load_centers, load_specialties
+from hospital_ocr.catalogs import load_centers, load_places, load_specialties
 from hospital_ocr.consolidation import consolidate_records
 from hospital_ocr.discovery import (
     discover_images,
@@ -33,6 +33,7 @@ class PipelineConfig:
     limit: int | None = None
     preprocess: bool = True
     overwrite: bool = False
+    places_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ def process_images(
 ) -> ProcessingResult:
     centers = load_centers(config.centers_path)
     specialties = load_specialties(config.specialties_path)
+    places = load_places(config.places_path)
     name_lexicons = load_name_lexicons(
         config.given_names_path,
         config.surnames_path,
@@ -129,6 +131,7 @@ def process_images(
                     name_lexicons,
                     source.center_name,
                     source.path.name,
+                    places,
                 )
             )
             processed += 1

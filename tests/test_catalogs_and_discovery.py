@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hospital_ocr.catalogs import load_centers, write_center_catalog
+from hospital_ocr.catalogs import load_centers, load_places, write_center_catalog
 from hospital_ocr.discovery import (
     discover_images,
     find_unmapped_images,
@@ -39,6 +39,21 @@ def test_write_center_catalog_for_custom_web_center(tmp_path: Path) -> None:
     assert load_centers(centers_path) == {
         "otro_centro": "Hospital Comunitario de Prueba"
     }
+
+
+def test_place_catalog_normalizes_aliases(tmp_path: Path) -> None:
+    places_path = tmp_path / "lugares.csv"
+    places_path.write_text(
+        "alias,lugar\nLa Guaira,La Guaira\nPETARE,Petare\n",
+        encoding="utf-8",
+    )
+
+    places = load_places(places_path)
+
+    assert [(place.alias, place.name) for place in places] == [
+        ("la guaira", "La Guaira"),
+        ("petare", "Petare"),
+    ]
 
 
 def test_pilot_selection_includes_first_and_last(tmp_path: Path) -> None:

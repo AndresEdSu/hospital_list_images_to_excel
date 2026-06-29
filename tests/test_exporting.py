@@ -68,6 +68,12 @@ def test_excel_contains_required_sheets_and_template(tmp_path: Path) -> None:
     assert "confianza_separacion_nombre" in patients.columns
     assert "orden_nombre_detectado" in patients.columns
     assert "confianza_ocr" in patients.columns
+    assert "confianza_nombre" in patients.columns
+    assert "confianza_cedula" in patients.columns
+    assert "confianza_edad" in patients.columns
+    assert "confianza_procedencia" in patients.columns
+    assert "confianza_especialidad" in patients.columns
+    assert "evidencia_extraccion" in patients.columns
     assert "linea_ocr_original" in patients.columns
     assert "imagenes_origen" in patients.columns
     assert "imagen_origen_principal" not in patients.columns
