@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 
 from hospital_ocr.models import OcrLine, PatientRecord, Specialty
 from hospital_ocr.name_splitter import NameLexicons, split_full_name
+from hospital_ocr.table_parser import parse_table_lines
 from hospital_ocr.text import clean_display_text, normalize_text
 
 
@@ -226,6 +227,15 @@ def parse_ocr_lines(
     center: str,
     source_image: str,
 ) -> list[PatientRecord]:
+    table_records = parse_table_lines(
+        lines,
+        name_lexicons,
+        center,
+        source_image,
+    )
+    if table_records is not None:
+        return table_records
+
     probe_lines = _merge_close_lines(lines)
     probe_headings = [
         line for line in probe_lines if detect_specialty(line.text, specialties)

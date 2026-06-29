@@ -23,6 +23,19 @@ def load_centers(path: Path) -> dict[str, str]:
     return centers
 
 
+def write_center_catalog(path: Path, center_slug: str, center_name: str) -> None:
+    """Create a minimal center catalog for one isolated web session."""
+    slug = center_slug.strip()
+    name = center_name.strip()
+    if not slug or not name:
+        raise ValueError("El centro de salud no puede estar vacío")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["carpeta", "centro"])
+        writer.writeheader()
+        writer.writerow({"carpeta": slug, "centro": name})
+
+
 def load_specialties(path: Path) -> list[Specialty]:
     specialties: list[Specialty] = []
     with path.open(encoding="utf-8-sig", newline="") as file:

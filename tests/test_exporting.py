@@ -26,6 +26,7 @@ def test_excel_contains_required_sheets_and_template(tmp_path: Path) -> None:
         confidence=0.95,
         needs_review=False,
         raw_line="María Pérez 8a F Petare",
+        clinical_notes="Plan: Politrauma",
     )
     output = tmp_path / "pacientes.xlsx"
 
@@ -73,6 +74,7 @@ def test_excel_contains_required_sheets_and_template(tmp_path: Path) -> None:
     assert "estado_revision" in patients.columns
     assert "requiere_revision" not in patients.columns
     assert patients.loc[0, "estado_revision"] == "No requerido"
+    assert patients.loc[0, "observaciones"] == "Plan: Politrauma"
     assert "estado_duplicado" in patients.columns
     assert "detalle_duplicado" in patients.columns
     patient_sheet = workbook["Pacientes"]

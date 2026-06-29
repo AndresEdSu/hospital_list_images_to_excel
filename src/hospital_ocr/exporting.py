@@ -74,7 +74,7 @@ DICTIONARY_ROWS = [
     ("Pacientes", "imagenes_origen", "Archivos donde apareció el paciente.", "Texto", "Nombres separados por punto y coma", "lista_01.jpg"),
     ("Pacientes", "confianza_ocr", "Confianza general del texto reconocido.", "Decimal", "0 a 1", "0.92"),
     ("Pacientes", "estado_revision", "Indica si el registro necesita comprobación humana.", "Categoría", "Pendiente; No requerido; Revisado", "Pendiente"),
-    ("Pacientes", "observaciones", "Motivos de revisión y conflictos detectados.", "Texto", "", "Sexo no reconocido"),
+    ("Pacientes", "observaciones", "Plan indicado en la tabla, motivos de revisión y conflictos detectados.", "Texto", "", "Plan: Politrauma"),
     ("Pacientes", "apariciones", "Cantidad de registros fusionados.", "Entero", "1 o mayor", "2"),
     ("Pacientes", "estado_duplicado", "Resultado del análisis de duplicados.", "Categoría", "Único; Posible duplicado; Duplicado consolidado", "Único"),
     ("Pacientes", "detalle_duplicado", "Explicación y registros relacionados con el duplicado.", "Texto", "", "Coincide con PAC-0002 | nombre 93%"),
@@ -96,7 +96,7 @@ def _full_row(record: PatientRecord) -> dict[str, Any]:
         "apellido": _safe_excel_text(record.last_name),
         "confianza_separacion_nombre": record.name_split_confidence,
         "orden_nombre_detectado": record.detected_name_order,
-        "cedula": "",
+        "cedula": _safe_excel_text(record.document_id),
         "centro": record.center,
         "edad": record.age,
         "unidad_edad": record.age_unit,
@@ -106,13 +106,21 @@ def _full_row(record: PatientRecord) -> dict[str, Any]:
         "area": record.area,
         "imagenes_origen": record.source_images_text,
         "confianza_ocr": record.confidence,
-        "estado_revision": "Pendiente" if record.needs_review else "No requerido",
-        "observaciones": record.notes_text,
+        "estado_revision": record.review_status
+        or ("Pendiente" if record.needs_review else "No requerido"),
+        "observaciones": record.observations_text,
         "apariciones": record.occurrences,
         "estado_duplicado": record.duplicate_status,
         "detalle_duplicado": record.duplicate_detail,
         "linea_ocr_original": _safe_excel_text(record.raw_line),
     }
+
+
+def patient_records_dataframe(records: list[PatientRecord]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [_full_row(record) for record in records],
+        columns=FULL_COLUMNS,
+    )
 
 
 def _header_columns(sheet: Any) -> dict[str, str]:
@@ -278,9 +286,7 @@ def export_results(
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     records = result.patients
-    full_rows = [_full_row(record) for record in records]
-
-    patients_df = pd.DataFrame(full_rows, columns=FULL_COLUMNS)
+    patients_df = patient_records_dataframe(records)
     template_df = pd.DataFrame(columns=TEMPLATE_COLUMNS)
     dictionary_df = pd.DataFrame(DICTIONARY_ROWS, columns=DICTIONARY_COLUMNS)
 

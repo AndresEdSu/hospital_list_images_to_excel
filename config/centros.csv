@@ -1,2 +1,51 @@
-carpeta,centro
-hospital_domingo_luciani,Hospital Domingo Luciani
+carpeta,centro,estado,ubicacion
+hospital_jose_gregorio_hernandez_puerto_ayacucho,Hospital Dr. José Gregorio Hernández,Amazonas,Puerto Ayacucho
+hospital_luis_razetti_barcelona,Hospital Universitario Dr. Luis Razetti,Anzoátegui,Barcelona
+hospital_felipe_guevara_rojas,Hospital General Dr. Felipe Guevara Rojas,Anzoátegui,El Tigre
+hospital_pablo_acosta_ortiz,Hospital General Dr. Pablo Acosta Ortiz,Apure,San Fernando de Apure
+hospital_central_maracay,Hospital Central de Maracay,Aragua,Maracay
+cdi_luchadores_por_la_salud,CDI Luchadores por la Salud,Aragua,Municipio Lamas
+hospital_luis_razetti_barinas,Hospital Dr. Luis Razetti de Barinas,Barinas,Barinas
+complejo_hospitalario_ruiz_y_paez,Complejo Hospitalario Universitario Ruiz y Páez,Bolívar,Ciudad Bolívar
+hospital_rosario_vera_zurita,Hospital Rosario Vera Zurita,Bolívar,Santa Elena de Uairén
+hospital_raul_leoni,Hospital Dr. Raúl Leoni (Guaiparo),Bolívar,Caroní
+ciudad_hospitalaria_enrique_tejera,Ciudad Hospitalaria Dr. Enrique Tejera (CHET),Carabobo,Valencia
+hospital_molina_sierra,Hospital Dr. José Francisco Molina Sierra,Carabobo,Puerto Cabello
+hospital_simon_bolivar_mariara,Hospital Simón Bolívar de Mariara,Carabobo,Mariara
+hospital_egor_nucette,Hospital General Dr. Egor Nucette,Cojedes,San Carlos
+complejo_hospitalario_luis_razetti_tucupita,Complejo Hospitalario Dr. Luis Razetti,Delta Amacuro,Tucupita
+hospital_jose_ignacio_baldo,Hospital General Dr. José Ignacio Baldó (El Algodonal),Distrito Capital,Antímano
+hospital_leopoldo_manrique_terrero,Hospital Dr. Leopoldo Manrique Terrero (Periférico de Coche),Distrito Capital,Coche
+hospital_jesus_yerena,Hospital General Dr. Jesús Yerena de Lídice,Distrito Capital,Lídice
+hospital_miguel_perez_carreno,Hospital Dr. Miguel Pérez Carreño,Distrito Capital,La Yaguara
+hospital_vargas_caracas,Hospital José María Vargas (Hospital Vargas de Caracas),Distrito Capital,San José
+hospital_ricardo_baquero_gonzalez,Hospital Médico Quirúrgico Dr. Ricardo Baquero González (Periférico de Catia),Distrito Capital,Flores de Catia
+hospital_general_oeste_jose_gregorio_hernandez,Hospital General del Oeste Dr. José Gregorio Hernández (Magallanes de Catia),Distrito Capital,Los Magallanes de Catia
+hospital_alfredo_van_grieken,Hospital Universitario Dr. Alfredo Van Grieken,Falcón,Coro
+hospital_israel_ranuarez_balza,Hospital Dr. Israel Ranuárez Balza,Guárico,San Juan de los Morros
+hospital_simon_bolivar_valle_pascua,Hospital Simón Bolívar de Valle de la Pascua,Guárico,Valle de la Pascua
+hospital_francisco_urdaneta_delgado,Hospital Dr. Francisco Urdaneta Delgado,Guárico,Calabozo
+hospital_rafael_medina_jimenez,Hospital Dr. Rafael Medina Jiménez (Periférico de Pariata),La Guaira,Pariata
+cdi_guaracarumbo,CDI Guaracarumbo,La Guaira,Catia La Mar
+hospital_jose_maria_vargas_macuto,Hospital Dr. José María Vargas (IVSS),La Guaira,Macuto
+hospital_armando_velasquez_mago,Hospital General Dr. Armando Velásquez Mago,Lara,Sarare
+cdi_san_jacinto,CDI San Jacinto,Lara,Municipio Iribarren
+hospital_universitario_los_andes,Instituto Autónomo Hospital Universitario de Los Andes (IAHULA),Mérida,Mérida
+hospital_hugo_chavez_frias_el_vigia,Hospital Hugo Chávez Frías de El Vigía,Mérida,El Vigía
+hospital_victorino_santaella,Hospital Victorino Santaella,Miranda,Los Teques
+hospital_simon_bolivar_valles_tuy,Hospital General Simón Bolívar,Miranda,Valles del Tuy
+hospital_eugenio_bellard,Hospital Dr. Eugenio P. D. Bellard,Miranda,Guatire
+hospital_domingo_luciani,Hospital Domingo Luciani,Miranda,El Llanito
+hospital_ana_francisca_perez_leon_ii,Hospital Ana Francisca Pérez de León II,Miranda,Petare
+hospital_general_higuerote,Hospital General de Higuerote,Miranda,Higuerote
+hospital_manuel_nunez_tovar,Hospital Universitario Dr. Manuel Núñez Tovar,Monagas,Maturín
+cdi_valle_verde,CDI Valle Verde,Nueva Esparta,Municipio García
+hospital_luis_ortega,Hospital Dr. Luis Ortega,Nueva Esparta,Porlamar
+hospital_jesus_maria_casal_ramos,Hospital Universitario Dr. Jesús María Casal Ramos,Portuguesa,Araure
+hospital_miguel_oraa,Hospital Dr. Miguel Oraá,Portuguesa,Guanare
+hospital_antonio_patricio_alcala,Hospital Universitario Antonio Patricio de Alcalá,Sucre,Cumaná
+hospital_central_san_cristobal,Hospital Central de San Cristóbal,Táchira,San Cristóbal
+hospital_pedro_emilio_carrillo,Hospital Universitario Dr. Pedro Emilio Carrillo,Trujillo,Valera
+hospital_placido_rodriguez_rivero,Hospital Central Dr. Plácido Daniel Rodríguez Rivero,Yaracuy,San Felipe
+hospital_universitario_maracaibo,Hospital Universitario de Maracaibo,Zulia,Maracaibo
+hospital_santa_barbara_zulia,Hospital Santa Bárbara,Zulia,Santa Bárbara del Zulia

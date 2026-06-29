@@ -13,6 +13,7 @@ dependencies = [
     "paddleocr>=3.7,<3.8",
     "pandas>=3,<4",
     "Pillow>=12,<13",
+    "streamlit>=1.45,<2",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,7 @@ dev = ["pytest>=9,<10"]
 
 [project.scripts]
 hospital-ocr = "hospital_ocr.cli:main"
+hospital-ocr-web = "hospital_ocr.web_launcher:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

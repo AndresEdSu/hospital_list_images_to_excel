@@ -72,4 +72,6 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Pacientes consolidados: {report.consolidated_records}")
     print(f"Registros para revisión: {report.review_records}")
     print(f"Errores: {len(report.errors)}")
+    for error in report.errors:
+        print(f"  - {error['imagen']}: {error['error']}")
     print(f"Excel: {report.output_path.resolve()}")

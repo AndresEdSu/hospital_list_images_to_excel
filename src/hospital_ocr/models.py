@@ -59,6 +59,9 @@ class PatientRecord:
     source_images: list[str] = field(default_factory=list)
     duplicate_status: str = "Único"
     duplicate_detail: str = ""
+    document_id: str = ""
+    review_status: str = ""
+    clinical_notes: str = ""
 
     def add_note(self, note: str) -> None:
         if note and note not in self.notes:
@@ -67,6 +70,11 @@ class PatientRecord:
     @property
     def notes_text(self) -> str:
         return "; ".join(self.notes)
+
+    @property
+    def observations_text(self) -> str:
+        values = [self.clinical_notes, *self.notes]
+        return "; ".join(dict.fromkeys(value for value in values if value))
 
     @property
     def source_images_text(self) -> str:

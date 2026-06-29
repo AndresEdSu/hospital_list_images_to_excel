@@ -11,9 +11,17 @@ from hospital_ocr.models import (
 from hospital_ocr.text import normalize_text
 
 
+def _normalized_document(value: str) -> str:
+    return "".join(character for character in value if character.isdigit())
+
+
 def _compatible_identity(left: PatientRecord, right: PatientRecord) -> bool:
     if left.center != right.center:
         return False
+    left_document = _normalized_document(left.document_id)
+    right_document = _normalized_document(right.document_id)
+    if left_document and right_document:
+        return left_document == right_document
     if left.age is None or right.age is None or left.age != right.age:
         return False
     if left.age_unit and right.age_unit and left.age_unit != right.age_unit:
@@ -35,6 +43,10 @@ def _possible_duplicate(
     left: PatientRecord, right: PatientRecord
 ) -> tuple[float, str] | None:
     if left.center != right.center:
+        return None
+    left_document = _normalized_document(left.document_id)
+    right_document = _normalized_document(right.document_id)
+    if left_document and right_document and left_document != right_document:
         return None
     left_name = normalize_text(left.full_name)
     right_name = normalize_text(right.full_name)
@@ -101,9 +113,38 @@ def _merge_record(target: PatientRecord, incoming: PatientRecord) -> None:
         if image not in target.source_images:
             target.source_images.append(image)
     _merge_value(target, "sex", incoming, "sexo")
+    _merge_value(target, "document_id", incoming, "cédula")
     _merge_value(target, "origin", incoming, "procedencia")
     _merge_value(target, "specialty", incoming, "especialidad")
     _merge_value(target, "area", incoming, "área")
+    target_document = _normalized_document(target.document_id)
+    incoming_document = _normalized_document(incoming.document_id)
+    same_document = (
+        bool(target_document)
+        and bool(incoming_document)
+        and target_document == incoming_document
+    )
+    if (
+        same_document
+        and normalize_text(target.full_name) != normalize_text(incoming.full_name)
+    ):
+        target.needs_review = True
+        target.add_note("Nombre OCR diferente para la misma cédula")
+    if (
+        same_document
+        and target.age is not None
+        and incoming.age is not None
+        and target.age != incoming.age
+    ):
+        target.needs_review = True
+        target.add_note("Edad diferente para la misma cédula")
+    if incoming.clinical_notes:
+        if not target.clinical_notes:
+            target.clinical_notes = incoming.clinical_notes
+        elif incoming.clinical_notes not in target.clinical_notes:
+            target.clinical_notes = (
+                f"{target.clinical_notes} | {incoming.clinical_notes}"
+            )
     for note in incoming.notes:
         target.add_note(note)
     _remove_resolved_notes(target)
