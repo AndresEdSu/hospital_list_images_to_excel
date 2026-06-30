@@ -4,7 +4,13 @@ import re
 from dataclasses import dataclass
 
 from hospital_ocr.matching import detect_specialty, match_place
-from hospital_ocr.models import OcrLine, PatientRecord, Place, Specialty
+from hospital_ocr.models import (
+    OcrLine,
+    PatientRecord,
+    Place,
+    Specialty,
+    TableGrid,
+)
 from hospital_ocr.name_splitter import NameLexicons, split_full_name
 from hospital_ocr.table_parser import parse_table_lines
 from hospital_ocr.text import clean_display_text, normalize_text
@@ -13,7 +19,7 @@ from hospital_ocr.text import clean_display_text, normalize_text
 AGE_RE = re.compile(
     r"(?<!\d)(?P<age>\d{1,3})"
     r"(?:\s*(?P<unit>años?|anos?|a|e|mes(?:es)?|d[ií]as?))?"
-    r"(?!\d)",
+    r"(?![A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9])",
     re.IGNORECASE,
 )
 DOCUMENT_RE = re.compile(
@@ -130,7 +136,14 @@ def _is_metadata(text: str) -> bool:
     normalized = normalize_text(text)
     if DATE_RE.search(text) or TIME_RE.search(text):
         return True
-    return normalized.startswith(("lista ", "actualizada ", "hora "))
+    if re.match(
+        r"^\d{1,2}(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)",
+        normalized,
+    ):
+        return True
+    return normalized.startswith(
+        ("lista ", "actualizada ", "hora ", "hospital ")
+    )
 
 
 def _overlaps(span: tuple[int, int], excluded: list[tuple[int, int]]) -> bool:
@@ -326,6 +339,67 @@ def _specialty_heading(
     return detected
 
 
+def _inline_name_text(
+    text: str,
+    index_span: tuple[int, int] | None,
+    document_match: re.Match[str] | None,
+    age_match: re.Match[str] | None,
+) -> str:
+    start = index_span[1] if index_span else 0
+    boundaries = [
+        match.start()
+        for match in (document_match, age_match)
+        if match is not None
+    ]
+    comma = text.find(",", start)
+    if comma >= 0:
+        boundaries.append(comma)
+    end = min(boundaries, default=len(text))
+    return _strip_leading_index(text[start:end])
+
+
+def _looks_like_inline_list(
+    lines: list[OcrLine],
+    specialties: list[Specialty],
+    places: list[Place],
+) -> bool:
+    strong_rows = 0
+    for line in lines:
+        if _is_metadata(line.text):
+            continue
+        index_span = _leading_index_span(line.text)
+        document = _document_match(line.text)
+        excluded = [index_span] if index_span else []
+        if document:
+            excluded.append(document.span())
+        age = _age_match(line.text, excluded)
+        name_text = _inline_name_text(
+            line.text,
+            index_span,
+            document,
+            age,
+        )
+        name_tokens = re.findall(
+            r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}",
+            name_text,
+        )
+        sex, _ = _standalone_sex(
+            line.text,
+            age.end() if age else document.end() if document else 0,
+        )
+        has_other_field = bool(
+            document
+            or age
+            or sex
+            or match_place(line.text, places)
+            or detect_specialty(line.text, specialties)
+        )
+        row_marker = bool(index_span or "," in line.text)
+        if len(name_tokens) >= 2 and has_other_field and row_marker:
+            strong_rows += 1
+    return strong_rows >= 3
+
+
 def parse_ocr_lines(
     lines: list[OcrLine],
     specialties: list[Specialty],
@@ -333,15 +407,22 @@ def parse_ocr_lines(
     center: str,
     source_image: str,
     places: list[Place] | None = None,
+    grid: TableGrid | None = None,
 ) -> list[PatientRecord]:
     places = places or []
-    table_records = parse_table_lines(
-        lines,
-        name_lexicons,
-        center,
-        source_image,
-        specialties,
-        places,
+    inline_list = _looks_like_inline_list(lines, specialties, places)
+    table_records = (
+        None
+        if inline_list
+        else parse_table_lines(
+            lines,
+            name_lexicons,
+            center,
+            source_image,
+            specialties,
+            places,
+            grid,
+        )
     )
     if table_records is not None:
         return table_records
@@ -363,6 +444,11 @@ def parse_ocr_lines(
         if detected:
             headings.append(Heading(line, detected[0], detected[1]))
             heading_ids.add(id(line))
+    if not headings:
+        for line in probe_headings:
+            detected = _specialty_heading(line, specialties)
+            if detected:
+                headings.append(Heading(line, detected[0], detected[1]))
 
     records: list[PatientRecord] = []
     for line in merged:
@@ -405,11 +491,19 @@ def parse_ocr_lines(
             else 0
         )
         place = match_place(line.text[place_probe_start:], places)
+        if place is None and inline_list:
+            index_end = index_span[1] if index_span else 0
+            comma = line.text.find(",", index_end)
+            if comma >= 0:
+                place = match_place(line.text[comma + 1 :], places)
         if age_match:
             age = int(age_match.group("age"))
             age_unit, uncertain_unit = _normalize_age_unit(age_match.group("unit"))
-            name_text = _strip_leading_index(
-                line.text[:first_field_position]
+            name_text = _inline_name_text(
+                line.text,
+                index_span,
+                document_match,
+                age_match,
             )
             remainder = DOCUMENT_RE.sub(" ", line.text[age_match.end() :])
             remainder = re.sub(
@@ -420,13 +514,25 @@ def parse_ocr_lines(
             )
             remainder = clean_display_text(remainder)
         else:
-            if context is None or not _looks_like_missing_age_candidate(line.text):
+            if (
+                context is None
+                and not inline_list
+            ) or (
+                not _looks_like_missing_age_candidate(line.text)
+                and not (
+                    inline_list
+                    and (document_match or place or sex_span)
+                )
+            ):
                 continue
             age = None
             age_unit = ""
             uncertain_unit = False
-            name_text = _strip_leading_index(
-                line.text[:first_field_position]
+            name_text = _inline_name_text(
+                line.text,
+                index_span,
+                document_match,
+                age_match,
             )
             remainder = ""
 
@@ -435,7 +541,9 @@ def parse_ocr_lines(
             name_text,
         )
         if len(alphabetic_tokens) < 2 or (
-            age is None and (index_span or place or sex_span)
+            age is None
+            and not inline_list
+            and (index_span or place or sex_span)
         ):
             name_text = _fallback_name_text(
                 line.text,

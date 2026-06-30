@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,59 @@ class OcrLine:
     @property
     def center_y(self) -> float:
         return (self.box[1] + self.box[3]) / 2
+
+
+@dataclass(frozen=True)
+class GridBoundary:
+    slope: float
+    intercept: float
+    support: float
+
+    def coordinate_at(self, position: float) -> float:
+        return self.slope * position + self.intercept
+
+
+@dataclass(frozen=True)
+class TableGrid:
+    horizontal: tuple[GridBoundary, ...]
+    vertical: tuple[GridBoundary, ...]
+    confidence: float
+
+    def row_index(self, x: float, y: float) -> int | None:
+        boundaries = [line.coordinate_at(x) for line in self.horizontal]
+        index = bisect_right(boundaries, y) - 1
+        return index if 0 <= index < len(boundaries) - 1 else None
+
+    def column_index(self, x: float, y: float) -> int | None:
+        boundaries = [line.coordinate_at(y) for line in self.vertical]
+        index = bisect_right(boundaries, x) - 1
+        return index if 0 <= index < len(boundaries) - 1 else None
+
+    def row_for_box(self, box: tuple[int, int, int, int]) -> int | None:
+        x = (box[0] + box[2]) / 2
+        boundaries = [line.coordinate_at(x) for line in self.horizontal]
+        return _best_interval(box[1], box[3], boundaries)
+
+    def column_for_box(self, box: tuple[int, int, int, int]) -> int | None:
+        y = (box[1] + box[3]) / 2
+        boundaries = [line.coordinate_at(y) for line in self.vertical]
+        return _best_interval(box[0], box[2], boundaries)
+
+
+def _best_interval(
+    start: float,
+    end: float,
+    boundaries: list[float],
+) -> int | None:
+    if len(boundaries) < 2:
+        return None
+    overlaps = [
+        max(0.0, min(end, upper) - max(start, lower))
+        for lower, upper in zip(boundaries, boundaries[1:], strict=False)
+    ]
+    if not overlaps or max(overlaps) <= 0:
+        return None
+    return max(range(len(overlaps)), key=overlaps.__getitem__)
 
 
 @dataclass(frozen=True)

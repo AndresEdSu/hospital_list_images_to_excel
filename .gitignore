@@ -20,6 +20,7 @@ data/interim/*
 !data/interim/.gitkeep
 data/output/*
 !data/output/.gitkeep
+data/cache/
 
 # Editores y sistema operativo
 .idea/

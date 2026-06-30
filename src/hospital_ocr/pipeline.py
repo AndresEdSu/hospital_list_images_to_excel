@@ -13,6 +13,13 @@ from hospital_ocr.discovery import (
     select_evenly,
 )
 from hospital_ocr.exporting import export_results
+from hospital_ocr.grid_detector import detect_table_grid
+from hospital_ocr.handwriting import (
+    detect_text_rows,
+    merge_row_ocr,
+    needs_row_ocr,
+    row_ocr_coverage,
+)
 from hospital_ocr.models import ConsolidationResult, PatientRecord
 from hospital_ocr.name_splitter import load_name_lexicons
 from hospital_ocr.ocr_engine import PaddleOcrEngine, save_raw_ocr
@@ -116,7 +123,52 @@ def process_images(
             else:
                 processed_path = source.path
 
+            grid_path = (
+                config.interim_dir
+                / "grids"
+                / source.center_slug
+                / f"{source.path.stem}.jpg"
+            )
+            grid = detect_table_grid(processed_path, grid_path)
             lines = engine.recognize(processed_path)
+            if grid is None:
+                rows = detect_text_rows(processed_path)
+                if needs_row_ocr(lines, rows):
+                    coverage_before = row_ocr_coverage(lines, rows)
+                    rows_dir = (
+                        config.interim_dir
+                        / "handwriting_rows"
+                        / source.center_slug
+                        / source.path.stem
+                    )
+                    segmented_lines = engine.recognize_rows(
+                        processed_path,
+                        rows,
+                        rows_dir,
+                    )
+                    lines = merge_row_ocr(lines, segmented_lines, rows)
+                    (rows_dir / "audit.json").write_text(
+                        json.dumps(
+                            {
+                                "fallback_activado": True,
+                                "cobertura_antes": round(coverage_before, 4),
+                                "cobertura_despues": round(
+                                    row_ocr_coverage(lines, rows),
+                                    4,
+                                ),
+                                "renglones": [
+                                    {
+                                        "caja": list(row.box),
+                                        "fuerza": round(row.strength, 4),
+                                    }
+                                    for row in rows
+                                ],
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
             raw_path = (
                 config.interim_dir
                 / "ocr"
@@ -132,6 +184,7 @@ def process_images(
                     source.center_name,
                     source.path.name,
                     places,
+                    grid,
                 )
             )
             processed += 1

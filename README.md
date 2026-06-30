@@ -12,7 +12,7 @@ Pipeline local para transformar imágenes de listas hospitalarias en archivos Ex
 - `config/nombres_comunes.csv`: catálogo configurable de nombres frecuentes.
 - `config/apellidos_comunes.csv`: catálogo configurable de apellidos frecuentes.
 - `data/input/images/`: imágenes originales, clasificadas en una subcarpeta por centro; su contenido no se guarda en Git.
-- `data/interim/`: imágenes preprocesadas y resultados OCR para auditoría.
+- `data/interim/`: imágenes preprocesadas, resultados OCR y cuadrículas detectadas para auditoría.
 - `data/output/`: archivos Excel finales.
 
 Cada subcarpeta de imágenes se relaciona con el nombre oficial del centro mediante `config/centros.csv`.
@@ -91,10 +91,35 @@ El Excel contiene:
 El pipeline detecta automáticamente las tablas con columnas de nombre, cédula,
 edad, sexo, procedencia, especialidad y plan. Los encabezados se comparan con
 aliases comunes y sus coordenadas se utilizan para inferir los límites y el
-orden real de las columnas. Cuando no hay encabezados confiables, se conserva
-el análisis por alineación y posición como respaldo. En las tablas, `Plan` se
-conserva dentro de `observaciones` y no se interpreta automáticamente como
-especialidad.
+orden real de las columnas. Cuando existen bordes visibles, las líneas
+horizontales y verticales se detectan sobre una copia de la imagen y cada caja
+OCR se asigna por solapamiento a una celda física. Esto permite seguir filas
+inclinadas o afectadas por perspectiva. Sin encabezados, cada fila se clasifica por formato
+y catálogo: patrón documental para cédula, rango y unidad para edad, valores
+cerrados para sexo y aliases para procedencia y especialidad. La columna de
+nombres se aprende por repetición, variedad y alineación, sin asumir una
+posición fija. La detección de la tabla combina regularidad entre filas,
+índices consecutivos y columnas auxiliares; edad, sexo y cédula son señales
+opcionales, no requisitos. En las tablas, `Plan` se conserva dentro de
+`observaciones` y no se interpreta automáticamente como especialidad.
+
+Las listas donde cada fila aparece en una sola caja OCR se distinguen de las
+tablas por su estructura. Una página se considera lista en línea cuando varias
+filas contienen un nombre y al menos otro campo reconocible —edad, cédula,
+sexo, procedencia o especialidad—. Una vez identificado ese patrón, también se
+conservan pacientes de la misma página que solo tengan nombre.
+
+Las superposiciones de auditoría de las cuadrículas aceptadas se guardan en
+`data/interim/grids/`. Si las líneas son débiles, incompletas o la confianza no
+alcanza el umbral, el procesamiento continúa con la agrupación semántica y
+geométrica anterior.
+
+En documentos sin cuadrícula, si el OCR inicial cubre pocos renglones, se
+activa un segundo pase para escritura manuscrita. Los renglones se detectan por
+concentración de trazos, se amplían y se leen en dos ventanas horizontales
+solapadas; luego sus fragmentos se alinean de nuevo en una sola fila lógica.
+Los recortes y el resumen de cobertura se guardan en
+`data/interim/handwriting_rows/` para auditoría.
 
 `Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
 
@@ -110,6 +135,11 @@ En `Pacientes`, `estado_duplicado` distingue registros únicos, posibles duplica
 `edad` y `unidad_edad` se conservan por separado en las hojas internas para distinguir años, meses y días. En `Plantilla` se combinan dentro de `edad_sector`.
 
 Cada palabra de `nombre_completo` se contrasta con los catálogos de nombres y apellidos. `nombre` y `apellido` solo se completan cuando la confianza es al menos 85% y existe una diferencia clara frente a otras separaciones posibles. Los casos ambiguos quedan vacíos y pendientes de revisión.
+
+Las procedencias y especialidades también comparan aliases en una representación
+compacta para tolerar espacios insertados o eliminados por el OCR. Las
+coincidencias más largas y específicas tienen prioridad sobre aliases parciales.
+Esta corrección de espacios no se aplica automáticamente a nombres personales.
 
 La hoja `Pacientes` incluye confianzas separadas para nombre, cédula, edad,
 procedencia y especialidad, además de la evidencia usada para clasificar cada

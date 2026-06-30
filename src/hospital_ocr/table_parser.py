@@ -6,7 +6,13 @@ from difflib import SequenceMatcher
 from statistics import median
 
 from hospital_ocr.matching import detect_specialty, match_place
-from hospital_ocr.models import OcrLine, PatientRecord, Place, Specialty
+from hospital_ocr.models import (
+    OcrLine,
+    PatientRecord,
+    Place,
+    Specialty,
+    TableGrid,
+)
 from hospital_ocr.name_splitter import NameLexicons, split_full_name
 from hospital_ocr.text import clean_display_text, normalize_text
 
@@ -128,6 +134,7 @@ class _Column:
     start: float
     end: float
     confidence: float
+    grid_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -257,7 +264,10 @@ def _unknown_header_candidates(
     return unknown
 
 
-def _infer_schema(lines: list[OcrLine]) -> _TableSchema | None:
+def _infer_schema(
+    lines: list[OcrLine],
+    grid: TableGrid | None = None,
+) -> _TableSchema | None:
     candidates = [
         candidate
         for line in lines
@@ -312,6 +322,10 @@ def _infer_schema(lines: list[OcrLine]) -> _TableSchema | None:
         field: sum(item.line.center_x for item in items) / len(items) / width
         for field, items in grouped.items()
     }
+    vertical_centers = {
+        field: sum(item.line.center_y for item in items) / len(items)
+        for field, items in grouped.items()
+    }
     ordered = sorted(centers, key=centers.get)
     columns: dict[str, _Column] = {}
     for index, field in enumerate(ordered):
@@ -326,12 +340,21 @@ def _infer_schema(lines: list[OcrLine]) -> _TableSchema | None:
             else (centers[field] + centers[ordered[index + 1]]) / 2
         )
         confidence = max(item.score for item in grouped[field])
+        grid_index = (
+            grid.column_index(
+                centers[field] * width,
+                vertical_centers[field],
+            )
+            if grid
+            else None
+        )
         columns[field] = _Column(
             field,
             centers[field],
             max(0.0, start),
             min(1.0, end),
             confidence,
+            grid_index,
         )
     return _TableSchema(
         columns=columns,
@@ -341,8 +364,11 @@ def _infer_schema(lines: list[OcrLine]) -> _TableSchema | None:
     )
 
 
-def _has_table_header(lines: list[OcrLine]) -> bool:
-    if _infer_schema(lines) is not None:
+def _has_table_header(
+    lines: list[OcrLine],
+    grid: TableGrid | None = None,
+) -> bool:
+    if _infer_schema(lines, grid) is not None:
         return True
     normalized = normalize_text(" ".join(line.text for line in lines))
     has_name = "nombre" in normalized and "apellido" in normalized
@@ -353,48 +379,175 @@ def _has_table_header(lines: list[OcrLine]) -> bool:
     return has_name and supporting >= 1
 
 
-def looks_like_table(lines: list[OcrLine]) -> bool:
+def _headerless_name_candidates(
+    lines: list[OcrLine],
+    grid: TableGrid | None = None,
+) -> list[OcrLine]:
+    width = max(1, lines[0].image_width)
+    candidates = [
+        line
+        for line in lines
+        if _name_from_text(line.text)
+        and not _is_header_or_metadata(line)
+    ]
+    if not candidates:
+        return []
+
+    clusters: list[list[OcrLine]] = []
+    if grid:
+        by_column: dict[int, list[OcrLine]] = {}
+        for line in candidates:
+            column = grid.column_for_box(line.box)
+            if column is not None:
+                by_column.setdefault(column, []).append(line)
+        clusters.extend(by_column.values())
+    if not clusters:
+        for line in sorted(candidates, key=lambda item: item.box[0]):
+            matching = next(
+                (
+                    cluster
+                    for cluster in clusters
+                    if abs(
+                        line.box[0] - median(item.box[0] for item in cluster)
+                    )
+                    <= width * 0.06
+                ),
+                None,
+            )
+            if matching is None:
+                clusters.append([line])
+            else:
+                matching.append(line)
+
+    def column_score(cluster: list[OcrLine]) -> tuple[float, float, float]:
+        names = [normalize_text(_name_from_text(line.text)) for line in cluster]
+        unique_ratio = len(set(names)) / len(names)
+        multiword_ratio = sum(len(name.split()) >= 2 for name in names) / len(names)
+        weighted_rows = len(cluster) * (0.55 + 0.45 * unique_ratio)
+        return (
+            weighted_rows,
+            _regular_row_ratio(cluster),
+            multiword_ratio,
+        )
+
+    return max(clusters, key=column_score)
+
+
+def _alignment_ratio(values: list[float], tolerance: float) -> float:
+    if not values:
+        return 0.0
+    center = median(values)
+    return sum(abs(value - center) <= tolerance for value in values) / len(values)
+
+
+def _regular_row_ratio(lines: list[OcrLine]) -> float:
+    centers = sorted({round(line.center_y, 1) for line in lines})
+    if len(centers) < 4:
+        return 0.0
+    gaps = [
+        current - previous
+        for previous, current in zip(centers, centers[1:], strict=False)
+        if current > previous
+    ]
+    if not gaps:
+        return 0.0
+    typical_gap = median(gaps)
+    tolerance = max(4.0, typical_gap * 0.35)
+    return sum(
+        abs(gap - typical_gap) <= tolerance
+        or abs(gap - typical_gap * 2) <= tolerance * 1.5
+        for gap in gaps
+    ) / len(gaps)
+
+
+def _sequential_index_ratio(lines: list[OcrLine]) -> float:
+    values = [
+        int(re.sub(r"\D", "", line.text))
+        for line in sorted(lines, key=lambda item: item.center_y)
+    ]
+    if len(values) < 2:
+        return 0.0
+    return sum(
+        current == previous + 1
+        for previous, current in zip(values, values[1:], strict=False)
+    ) / (len(values) - 1)
+
+
+def _has_repeated_auxiliary_column(
+    lines: list[OcrLine],
+    name_candidates: list[OcrLine],
+    grid: TableGrid | None = None,
+) -> bool:
+    if not name_candidates:
+        return False
+    width = max(1, lines[0].image_width)
+    name_ids = {id(line) for line in name_candidates}
+    minimum_y = min(line.center_y for line in name_candidates)
+    maximum_y = max(line.center_y for line in name_candidates)
+    bins: dict[int, int] = {}
+    for line in lines:
+        if id(line) in name_ids or not minimum_y <= line.center_y <= maximum_y:
+            continue
+        if re.fullmatch(r"\s*\d{1,3}\s*[.):\-]?\s*", line.text):
+            continue
+        if not normalize_text(line.text):
+            continue
+        grid_column = grid.column_for_box(line.box) if grid else None
+        bucket = (
+            grid_column
+            if grid_column is not None
+            else round((line.box[0] / width) / 0.04)
+        )
+        bins[bucket] = bins.get(bucket, 0) + 1
+    minimum_repetitions = max(3, round(len(name_candidates) * 0.30))
+    return any(count >= minimum_repetitions for count in bins.values())
+
+
+def looks_like_table(
+    lines: list[OcrLine],
+    grid: TableGrid | None = None,
+) -> bool:
     if not lines:
         return False
-    if _has_table_header(lines):
+    if _has_table_header(lines, grid):
         return True
 
     width = lines[0].image_width
-    left_row_numbers = sum(
-        bool(re.fullmatch(r"\s*\d{1,3}\.?\s*", line.text))
-        and line.center_x < width * 0.16
-        for line in lines
-    )
+    row_index_ids = _infer_headerless_index_ids(lines)
     sex_markers = [
         line.center_x
         for line in lines
         if re.fullmatch(r"\s*[MFH]\s*", line.text, re.IGNORECASE)
-        and width * 0.35 < line.center_x < width * 0.55
     ]
     aligned_sex_markers = (
         len(sex_markers) >= 4
-        and max(sex_markers) - min(sex_markers) <= width * 0.08
+        and _alignment_ratio(sex_markers, width * 0.06) >= 0.75
     )
-    name_candidates = sum(
-        bool(_name_from_text(line.text))
-        and line.box[0] < width * 0.34
-        and line.box[2] > width * 0.08
-        and line.center_x < width * 0.39
-        for line in lines
-    )
+    name_candidates = _headerless_name_candidates(lines, grid)
     document_markers = sum(
         bool(_document_digits(line.text))
-        and line.box[2] >= width * 0.24
-        and line.box[0] <= width * 0.44
         for line in lines
     )
-    numbered_table = left_row_numbers >= 6 and aligned_sex_markers
-    unnumbered_table = (
-        name_candidates >= 6
-        and document_markers >= 4
-        and aligned_sex_markers
-    )
-    return numbered_table or unnumbered_table
+    score = 2 if grid and grid.confidence >= 0.65 else 0
+    if len(name_candidates) >= 5:
+        score += 2
+    if _alignment_ratio(
+        [line.box[0] for line in name_candidates],
+        width * 0.06,
+    ) >= 0.75:
+        score += 2
+    if _regular_row_ratio(name_candidates) >= 0.65:
+        score += 2
+    if len(row_index_ids) >= 4:
+        score += 2
+    if aligned_sex_markers:
+        score += 1
+    if document_markers >= 3:
+        score += 1
+    if _has_repeated_auxiliary_column(lines, name_candidates, grid):
+        score += 1
+
+    return score >= 6
 
 
 def _name_from_text(text: str) -> str:
@@ -441,9 +594,14 @@ def _row_index_lines(
     lines: list[OcrLine],
     anchor: _RowAnchor,
     schema: _TableSchema | None,
+    headerless_index_ids: set[int] | None = None,
 ) -> list[OcrLine]:
+    if schema is None:
+        index_ids = headerless_index_ids or set()
+        return [line for line in lines if id(line) in index_ids]
+
     width = max(1, anchor.line.image_width)
-    age_column = schema.columns.get("age") if schema else None
+    age_column = schema.columns.get("age")
     indexes: list[OcrLine] = []
     for line in lines:
         if not re.fullmatch(r"\s*\d{1,3}\s*[.):\-]?\s*", line.text):
@@ -457,6 +615,50 @@ def _row_index_lines(
         if line.box[2] <= anchor.line.box[0] or normalized_center < 0.16:
             indexes.append(line)
     return indexes
+
+
+def _infer_headerless_index_ids(lines: list[OcrLine]) -> set[int]:
+    if not lines:
+        return set()
+    width = max(1, lines[0].image_width)
+    candidates = [
+        line
+        for line in lines
+        if re.fullmatch(r"\s*\d{1,3}\s*[.):\-]?\s*", line.text)
+    ]
+    clusters: list[list[OcrLine]] = []
+    for line in sorted(candidates, key=lambda item: item.center_x):
+        matching = next(
+            (
+                cluster
+                for cluster in clusters
+                if abs(
+                    line.center_x - median(item.center_x for item in cluster)
+                )
+                <= width * 0.04
+            ),
+            None,
+        )
+        if matching is None:
+            clusters.append([line])
+        else:
+            matching.append(line)
+
+    sequential = [
+        cluster
+        for cluster in clusters
+        if len(cluster) >= 4 and _sequential_index_ratio(cluster) >= 0.70
+    ]
+    if not sequential:
+        return set()
+    selected = max(
+        sequential,
+        key=lambda cluster: (
+            len(cluster),
+            _sequential_index_ratio(cluster),
+        ),
+    )
+    return {id(line) for line in selected}
 
 
 def _is_header_or_metadata(line: OcrLine) -> bool:
@@ -492,8 +694,14 @@ def _header_cutoff(lines: list[OcrLine]) -> float | None:
 def _find_row_anchors(
     lines: list[OcrLine],
     schema: _TableSchema | None = None,
+    grid: TableGrid | None = None,
 ) -> list[_RowAnchor]:
     width = lines[0].image_width
+    headerless_name_ids = (
+        {id(line) for line in _headerless_name_candidates(lines, grid)}
+        if schema is None
+        else set()
+    )
     candidates: list[_RowAnchor] = []
     for line in lines:
         if schema and "name" in schema.columns:
@@ -503,11 +711,7 @@ def _find_row_anchors(
                 name_column.start <= normalized_center < name_column.end
             )
         else:
-            reaches_name_column = (
-                line.box[0] < width * 0.34
-                and line.box[2] > width * 0.08
-                and line.center_x < width * 0.39
-            )
+            reaches_name_column = id(line) in headerless_name_ids
         if not reaches_name_column or _is_header_or_metadata(line):
             continue
         name = _name_from_text(line.text)
@@ -551,7 +755,33 @@ def _find_row_anchors(
 def _row_groups(
     lines: list[OcrLine],
     anchors: list[_RowAnchor],
+    grid: TableGrid | None = None,
 ) -> list[tuple[_RowAnchor, list[OcrLine]]]:
+    if grid:
+        anchor_rows = [
+            (anchor, grid.row_for_box(anchor.line.box))
+            for anchor in anchors
+        ]
+        assigned = [
+            (anchor, row)
+            for anchor, row in anchor_rows
+            if row is not None
+        ]
+        unique_rows = {row for _, row in assigned}
+        if (
+            len(assigned) >= max(2, round(len(anchors) * 0.70))
+            and len(unique_rows) == len(assigned)
+        ):
+            lines_by_row: dict[int, list[OcrLine]] = {}
+            for line in lines:
+                row = grid.row_for_box(line.box)
+                if row is not None:
+                    lines_by_row.setdefault(row, []).append(line)
+            return [
+                (anchor, lines_by_row.get(row, []))
+                for anchor, row in assigned
+            ]
+
     centers = [anchor.line.center_y for anchor in anchors]
     groups: list[tuple[_RowAnchor, list[OcrLine]]] = []
     for index, anchor in enumerate(anchors):
@@ -592,30 +822,6 @@ def _split_document_and_age(digits: str) -> tuple[str, int | None]:
     return "", None
 
 
-def _extract_document_and_compound_age(
-    lines: list[OcrLine],
-    width: int,
-) -> tuple[str, int | None]:
-    candidates: list[tuple[float, str]] = []
-    for line in lines:
-        overlaps_document = (
-            line.box[2] >= width * 0.24
-            and line.box[0] <= width * 0.44
-        )
-        if not overlaps_document:
-            continue
-        for digits in _document_digits(line.text):
-            document, age = _split_document_and_age(digits)
-            if document:
-                distance = abs(line.center_x / width - 0.33)
-                candidates.append((distance, f"{document}|{age or ''}"))
-    if not candidates:
-        return "", None
-    _, value = min(candidates, key=lambda item: item[0])
-    document, age_text = value.split("|", 1)
-    return document, int(age_text) if age_text else None
-
-
 def _ocr_number(value: str) -> int | None:
     compact = re.sub(r"[^A-Za-z0-9]", "", value).upper()
     compact = re.sub(r"^[CE]", "", compact)
@@ -627,108 +833,40 @@ def _ocr_number(value: str) -> int | None:
     return number if 0 <= number <= 115 else None
 
 
-def _extract_age(
-    lines: list[OcrLine],
-    width: int,
-    compound_age: int | None,
-    name_line: OcrLine | None = None,
-) -> int | None:
-    candidates: list[tuple[float, int]] = []
-    for line in lines:
-        overlaps_age = (
-            line.box[2] >= width * 0.36
-            and line.box[0] <= width * 0.46
-            and line.center_x >= width * 0.30
-        )
-        if not overlaps_age:
-            continue
-        if DATE_RE.search(line.text) or TIME_RE.search(line.text):
-            continue
-        candidate_text = line.text
-        if line is name_line and _has_leading_index(candidate_text):
-            candidate_text = re.sub(
-                r"^\s*\d{1,3}(?:\s*[.):\-]\s*|\s+)",
-                " ",
-                candidate_text,
-                count=1,
-            )
-        text_without_document = DOCUMENT_RE.sub(" ", candidate_text)
-        for token in re.findall(r"[A-Za-z]?\d{1,3}|[A-Za-z]\d", text_without_document):
-            age = _ocr_number(token)
-            if age is not None:
-                distance = abs(line.center_x / width - 0.40)
-                candidates.append((distance, age))
-    if candidates:
-        return min(candidates, key=lambda item: item[0])[1]
-    return compound_age
-
-
-def _extract_sex(lines: list[OcrLine], width: int) -> str:
-    candidates: list[tuple[float, str]] = []
-    for line in lines:
-        if not (
-            line.box[2] >= width * 0.41
-            and line.box[0] <= width * 0.51
-        ):
-            continue
-        marker = re.sub(r"[^A-Za-z]", "", line.text).upper()
-        if marker in {"M", "H", "N"}:
-            sex = "M"
-        elif marker == "F":
-            sex = "F"
-        else:
-            continue
-        candidates.append((abs(line.center_x / width - 0.455), sex))
-    return min(candidates, default=(0.0, ""), key=lambda item: item[0])[1]
-
-
-def _column_text(
-    lines: list[OcrLine],
-    width: int,
-    start: float,
-    end: float | None,
-) -> str:
-    selected = []
-    for line in lines:
-        normalized_start = line.box[0] / width
-        normalized_center = line.center_x / width
-        in_column = normalized_start >= start or normalized_center >= start
-        if end is not None:
-            in_column = in_column and normalized_center < end
-        if in_column and not _is_header_or_metadata(line):
-            selected.append(line)
-    return clean_display_text(
-        " ".join(line.text for line in sorted(selected, key=lambda item: item.center_x))
-    )
-
-
 def _schema_lines(
     lines: list[OcrLine],
     schema: _TableSchema,
     field: str,
+    grid: TableGrid | None = None,
 ) -> list[OcrLine]:
     column = schema.columns.get(field)
     if column is None:
         return []
     width = max(1, lines[0].image_width) if lines else 1
-    return [
-        line
-        for line in lines
-        if column.start <= line.center_x / width < column.end
-        and not _is_header_or_metadata(line)
-    ]
+    selected: list[OcrLine] = []
+    for line in lines:
+        if _is_header_or_metadata(line):
+            continue
+        if grid and column.grid_index is not None:
+            in_column = grid.column_for_box(line.box) == column.grid_index
+        else:
+            in_column = column.start <= line.center_x / width < column.end
+        if in_column:
+            selected.append(line)
+    return selected
 
 
 def _schema_text(
     lines: list[OcrLine],
     schema: _TableSchema,
     field: str,
+    grid: TableGrid | None = None,
 ) -> str:
     return clean_display_text(
         " ".join(
             line.text
             for line in sorted(
-                _schema_lines(lines, schema, field),
+                _schema_lines(lines, schema, field, grid),
                 key=lambda item: item.center_x,
             )
         )
@@ -776,6 +914,81 @@ def _average_score(lines: list[OcrLine], fallback: float = 0.0) -> float:
     return sum(scores) / len(scores) if scores else fallback
 
 
+def _headerless_field_lines(
+    lines: list[OcrLine],
+    anchor: _RowAnchor,
+    grid: TableGrid | None = None,
+) -> list[OcrLine]:
+    width = max(1, anchor.line.image_width)
+    name_grid_column = grid.column_for_box(anchor.line.box) if grid else None
+    selected: list[OcrLine] = []
+    for line in lines:
+        if line is anchor.line or _is_header_or_metadata(line):
+            continue
+        if grid and name_grid_column is not None:
+            same_name_column = (
+                grid.column_for_box(line.box) == name_grid_column
+            )
+        else:
+            same_name_column = (
+                bool(_name_from_text(line.text))
+                and abs(line.box[0] - anchor.line.box[0]) <= width * 0.08
+            )
+        if not same_name_column:
+            selected.append(line)
+    return selected
+
+
+def _extract_semantic_age(
+    lines: list[OcrLine],
+) -> tuple[int | None, str]:
+    candidates: list[tuple[int, float, int, str]] = []
+    for line in lines:
+        if DATE_RE.search(line.text) or TIME_RE.search(line.text):
+            continue
+        if DOCUMENT_RE.search(line.text):
+            continue
+        normalized = normalize_text(line.text)
+        match = re.fullmatch(
+            r"(?:edad\s*)?(?P<age>\d{1,3})\s*"
+            r"(?P<unit>anos?|a|mes(?:es)?|dias?)?",
+            normalized,
+        )
+        if match is None:
+            continue
+        age = int(match.group("age"))
+        if not 0 <= age <= 115:
+            continue
+        unit = match.group("unit") or ""
+        normalized_unit = (
+            "meses"
+            if unit.startswith("mes")
+            else "días"
+            if unit.startswith("dia")
+            else "años"
+        )
+        candidates.append((int(bool(unit)), line.score, age, normalized_unit))
+    if not candidates:
+        return None, ""
+    candidates.sort(reverse=True)
+    if (
+        len(candidates) > 1
+        and candidates[0][0] == 0
+        and candidates[1][0] == 0
+    ):
+        return None, ""
+    _, _, age, unit = candidates[0]
+    return age, unit
+
+
+def _joined_cell_text(lines: list[OcrLine]) -> str:
+    return clean_display_text(
+        " ".join(
+            line.text for line in sorted(lines, key=lambda item: item.center_x)
+        )
+    )
+
+
 def parse_table_lines(
     lines: list[OcrLine],
     name_lexicons: NameLexicons,
@@ -783,22 +996,25 @@ def parse_table_lines(
     source_image: str,
     specialties: list[Specialty] | None = None,
     places: list[Place] | None = None,
+    grid: TableGrid | None = None,
 ) -> list[PatientRecord] | None:
     specialties = specialties or []
     places = places or []
-    if not looks_like_table(lines):
+    if not looks_like_table(lines, grid):
         return None
-    schema = _infer_schema(lines)
+    schema = _infer_schema(lines, grid)
     data_lines = (
         [line for line in lines if line.center_y > schema.header_bottom]
         if schema
         else lines
     )
-    anchors = _find_row_anchors(data_lines, schema)
+    anchors = _find_row_anchors(data_lines, schema, grid)
     if len(anchors) < 2:
         return []
 
-    width = lines[0].image_width
+    headerless_index_ids = (
+        _infer_headerless_index_ids(data_lines) if schema is None else set()
+    )
     header_cutoff = schema.header_bottom if schema else _header_cutoff(lines)
     page_specialty: tuple[str, str] | None = None
     if schema:
@@ -809,44 +1025,55 @@ def parse_table_lines(
                 page_specialty = detected
                 break
     records: list[PatientRecord] = []
-    for anchor, row_lines in _row_groups(data_lines, anchors):
+    for anchor, row_lines in _row_groups(data_lines, anchors, grid):
         if header_cutoff is not None and anchor.line.center_y > header_cutoff:
             row_lines = [
                 line for line in row_lines if line.center_y > header_cutoff
             ]
         raw_row_lines = list(row_lines)
-        index_lines = _row_index_lines(row_lines, anchor, schema)
+        index_lines = _row_index_lines(
+            row_lines,
+            anchor,
+            schema,
+            headerless_index_ids,
+        )
         row_lines = [line for line in row_lines if line not in index_lines]
         index_detected = bool(index_lines or _has_leading_index(anchor.line.text))
         if schema:
-            document_lines = _schema_lines(row_lines, schema, "document")
-            age_lines = _schema_lines(row_lines, schema, "age")
-            sex_lines = _schema_lines(row_lines, schema, "sex")
-            origin_lines = _schema_lines(row_lines, schema, "origin")
-            specialty_lines = _schema_lines(row_lines, schema, "specialty")
+            document_lines = _schema_lines(
+                row_lines, schema, "document", grid
+            )
+            age_lines = _schema_lines(row_lines, schema, "age", grid)
+            sex_lines = _schema_lines(row_lines, schema, "sex", grid)
+            origin_lines = _schema_lines(row_lines, schema, "origin", grid)
+            specialty_lines = _schema_lines(
+                row_lines, schema, "specialty", grid
+            )
             document_id = _extract_document(document_lines)
             age = _extract_schema_age(age_lines)
+            age_unit = "años" if age is not None else ""
             sex = _extract_schema_sex(sex_lines)
-            origin_text = _schema_text(row_lines, schema, "origin")
-            plan = _schema_text(row_lines, schema, "plan")
-            specialty_text = _schema_text(row_lines, schema, "specialty")
+            origin_text = _schema_text(
+                row_lines, schema, "origin", grid
+            )
+            plan = _schema_text(row_lines, schema, "plan", grid)
+            specialty_text = _schema_text(
+                row_lines, schema, "specialty", grid
+            )
         else:
-            document_id, compound_age = _extract_document_and_compound_age(
-                row_lines,
-                width,
-            )
-            age = _extract_age(
-                row_lines,
-                width,
-                compound_age,
-                name_line=anchor.line,
-            )
-            sex = _extract_sex(row_lines, width)
-            origin_text = _column_text(row_lines, width, 0.56, 0.71)
-            plan = _column_text(row_lines, width, 0.70, None)
-            document_lines = age_lines = sex_lines = origin_lines = []
-            specialty_lines = []
-            specialty_text = ""
+            field_lines = _headerless_field_lines(row_lines, anchor, grid)
+            document_id = _extract_document(field_lines)
+            age, age_unit = _extract_semantic_age(field_lines)
+            sex = _extract_schema_sex(field_lines)
+            semantic_text = _joined_cell_text(field_lines)
+            origin_text = semantic_text
+            specialty_text = semantic_text
+            plan = ""
+            document_lines = field_lines
+            age_lines = field_lines
+            sex_lines = field_lines
+            origin_lines = field_lines
+            specialty_lines = field_lines
 
         place = match_place(origin_text, places)
         has_explicit_origin = bool(schema and "origin" in schema.columns)
@@ -929,7 +1156,11 @@ def parse_table_lines(
             )
             evidence = {
                 "nombre": (
-                    "columna inferida por encabezado; índice descartado"
+                    "cuadrícula física y encabezado; índice descartado"
+                    if grid and index_detected
+                    else "cuadrícula física y encabezado"
+                    if grid
+                    else "columna inferida por encabezado; índice descartado"
                     if index_detected
                     else "columna inferida por encabezado"
                 ),
@@ -944,7 +1175,9 @@ def parse_table_lines(
                     else ""
                 ),
                 "procedencia": (
-                    "encabezado y catálogo geográfico"
+                    "cuadrícula, encabezado y catálogo geográfico"
+                    if grid and place
+                    else "encabezado y catálogo geográfico"
                     if place
                     else "columna inferida por encabezado"
                     if origin
@@ -960,21 +1193,34 @@ def parse_table_lines(
             }
         else:
             name_confidence = anchor.line.score * 0.70
-            document_confidence = confidence * 0.70 if document_id else 0.0
-            age_confidence = confidence * 0.60 if age is not None else 0.0
-            origin_confidence = confidence * 0.50 if origin else 0.0
-            specialty_confidence = 0.0
+            document_confidence = confidence * 0.85 if document_id else 0.0
+            age_confidence = confidence * 0.65 if age is not None else 0.0
+            origin_confidence = (
+                confidence * place.score if origin and place else 0.0
+            )
+            specialty_confidence = confidence * 0.75 if specialty else 0.0
             evidence = {
                 "nombre": (
-                    "posición de respaldo; índice descartado"
+                    "cuadrícula física y columna repetida; índice descartado"
+                    if grid and index_detected
+                    else "cuadrícula física y columna repetida"
+                    if grid
+                    else "columna repetida y alineada; índice descartado"
                     if index_detected
-                    else "posición de respaldo"
+                    else "columna repetida y alineada"
                 ),
-                "cédula": "formato y posición de respaldo" if document_id else "",
-                "edad": "formato y posición de respaldo" if age is not None else "",
+                "cédula": "formato de documento en la fila" if document_id else "",
+                "edad": "formato de edad en la fila" if age is not None else "",
                 "procedencia": (
-                    "catálogo geográfico y posición de respaldo"
+                    "catálogo geográfico en celda física sin encabezado"
+                    if grid and place
+                    else "catálogo geográfico en celda sin encabezado"
                     if place
+                    else ""
+                ),
+                "especialidad": (
+                    "catálogo de especialidades en celda sin encabezado"
+                    if specialty
                     else ""
                 ),
             }
@@ -987,7 +1233,7 @@ def parse_table_lines(
                 detected_name_order=name_split.detected_order,
                 center=center,
                 age=age,
-                age_unit="años" if age is not None else "",
+                age_unit=age_unit,
                 sex=sex,
                 origin=origin,
                 specialty=specialty,
