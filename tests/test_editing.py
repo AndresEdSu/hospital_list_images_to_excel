@@ -103,3 +103,49 @@ def test_invalid_age_is_rejected() -> None:
         assert "Edad fuera del rango" in str(error)
     else:
         raise AssertionError("La edad inválida debía rechazarse")
+
+
+def test_age_unit_is_cleared_when_age_is_removed() -> None:
+    patient = PatientRecord(
+        full_name="María Pérez",
+        first_name="María",
+        last_name="Pérez",
+        name_split_confidence=1.0,
+        detected_name_order="Nombre-Apellido",
+        center="Hospital de Prueba",
+        age=8,
+        age_unit="años",
+        sex="F",
+        origin="Petare",
+        specialty="Pediatría",
+        area="",
+        source_image="lista.jpg",
+        confidence=0.9,
+        needs_review=False,
+        patient_id="PAC-0001",
+    )
+    edited = pd.DataFrame(
+        [
+            {
+                "id_paciente": "PAC-0001",
+                "nombre_completo": "María Pérez",
+                "nombre": "María",
+                "apellido": "Pérez",
+                "cedula": "",
+                "centro": "Hospital de Prueba",
+                "edad": None,
+                "unidad_edad": "años",
+                "sexo": "F",
+                "procedencia": "Petare",
+                "especialidad": "Pediatría",
+                "area": "",
+                "estado_revision": "No requerido",
+                "observaciones": "",
+            }
+        ]
+    )
+
+    apply_patient_edits([patient], edited)
+
+    assert patient.age is None
+    assert patient.age_unit == ""

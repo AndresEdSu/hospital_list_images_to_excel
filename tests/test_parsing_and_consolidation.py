@@ -439,6 +439,178 @@ def test_slanted_grid_keeps_distant_cells_in_the_same_row() -> None:
     assert records[2].origin == ""
 
 
+def test_partial_vertical_grid_keeps_names_outside_detected_columns() -> None:
+    grid = TableGrid(
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (80, 130, 180, 230, 280, 330, 380)
+        ),
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (350, 500, 620, 700, 850, 1000)
+        ),
+        0.92,
+    )
+    names = [
+        "Monica Vielma",
+        "Elizabeth Delgado",
+        "Yaritza Garcia",
+        "Vanessa Gonzalez",
+        "Grismele Navarro",
+        "Josefina Rojas",
+    ]
+    origins = ["Guaira", "Caracas", "Guaira", "Caracas", "Guaira", "Caracas"]
+    lines: list[OcrLine] = []
+    for index, (name, origin) in enumerate(zip(names, origins, strict=True)):
+        y = 90 + index * 50
+        lines.extend(
+            [
+                table_line(name, y, 100, 380),
+                table_line(f"12345{index + 10}", y, 390, 480),
+                table_line(origin, y, 720, 820),
+            ]
+        )
+
+    places = [Place("guaira", "Guaira"), Place("caracas", "Caracas")]
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "cuadricula_vertical_parcial.jpg",
+        places,
+        grid,
+    )
+
+    assert [record.full_name for record in records] == names
+    assert [record.origin for record in records] == origins
+
+
+def test_headerless_partial_grid_recovers_documents_and_ages() -> None:
+    grid = TableGrid(
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (80, 130, 180, 230, 280, 330, 380)
+        ),
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (350, 500, 620, 700, 850, 1000)
+        ),
+        0.92,
+    )
+    names = [
+        "Monica Vielma",
+        "Elizabeth Delgado",
+        "Yaritza Garcia",
+        "Vanessa Gonzalez",
+        "Grismele Navarro",
+        "Josefina Rojas",
+    ]
+    documents = [
+        "18404003",
+        "32446991",
+        "12950267",
+        "15164293",
+        "14953283",
+        "26590820",
+    ]
+    ages = [38, 20, 53, 24, 43, 26]
+    noisy_indexes = ["32", "34", "15", "18", "9", "60"]
+    lines: list[OcrLine] = []
+    for index, (name, document, age, row_index) in enumerate(
+        zip(names, documents, ages, noisy_indexes, strict=True)
+    ):
+        y = 90 + index * 50
+        lines.append(table_line(row_index, y, 5, 50))
+        if index < 3:
+            lines.extend(
+                [
+                    table_line(f"{name} {document}", y, 100, 580),
+                    table_line(str(age), y, 630, 670),
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    table_line(name, y, 100, 330),
+                    table_line(f"{document} {age}", y, 390, 670),
+                ]
+            )
+        lines.append(table_line("Guaira", y, 720, 820))
+
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "campos_fusionados_sin_encabezado.jpg",
+        [Place("guaira", "Guaira")],
+        grid,
+    )
+
+    assert [record.full_name for record in records] == names
+    assert [record.document_id for record in records] == documents
+    assert [record.age for record in records] == ages
+
+
+def test_cropped_top_table_keeps_first_partial_row() -> None:
+    grid = TableGrid(
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (40, 80, 120, 160, 200, 240)
+        ),
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (50, 350, 700, 1000)
+        ),
+        0.92,
+    )
+    names = [
+        "Monica Vielma",
+        "Elizabeth Delgado",
+        "Yaritza Garcia",
+        "Vanessa Gonzalez",
+        "Grismele Navarro",
+        "Josefina Rojas",
+    ]
+    documents = [
+        "18404003",
+        "32446991",
+        "12950267",
+        "15164293",
+        "14953283",
+        "26590820",
+    ]
+    ages = [38, 20, 53, 24, 43, 26]
+    lines: list[OcrLine] = []
+    for index, (name, document, age) in enumerate(
+        zip(names, documents, ages, strict=True)
+    ):
+        y = 2 if index == 0 else 50 + (index - 1) * 40
+        lines.extend(
+            [
+                table_line(name, y, 100, 320),
+                table_line(f"{document} {age}", y, 400, 650),
+                table_line("Guaira", y, 750, 900),
+            ]
+        )
+
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "tabla_recortada_arriba.jpg",
+        [Place("guaira", "Guaira")],
+        grid,
+    )
+
+    assert [record.full_name for record in records] == names
+    assert records[0].document_id == "18404003"
+    assert records[0].age == 38
+    assert records[0].origin == "Guaira"
+
+
 def test_partial_grid_header_infers_missing_document_age_and_sex() -> None:
     grid = TableGrid(
         tuple(GridBoundary(0.0, position, 1.0) for position in (0, 40, 80, 120, 160)),
@@ -763,6 +935,41 @@ def test_consolidation_merges_compatible_duplicates_and_keeps_evidence() -> None
     assert "2 apariciones consolidadas" in result.patients[0].duplicate_detail
     assert len(result.evidence) == 2
     assert result.evidence[0].patient_id == result.evidence[1].patient_id
+
+
+def test_consolidation_preserves_first_appearance_order() -> None:
+    first = record(
+        full_name="Zuleima Rojas",
+        age=30,
+        confidence=0.40,
+        source_image="primera.jpg",
+    )
+    second = record(
+        full_name="Ana Torres",
+        age=42,
+        confidence=0.80,
+        source_image="segunda.jpg",
+    )
+    duplicate = record(
+        full_name="Zuleima Rojas",
+        age=30,
+        confidence=0.99,
+        source_image="tercera.jpg",
+    )
+
+    result = consolidate_records([first, second, duplicate])
+
+    assert [patient.full_name for patient in result.patients] == [
+        "Zuleima Rojas",
+        "Ana Torres",
+    ]
+    assert result.patients[0].source_images == [
+        "primera.jpg",
+        "tercera.jpg",
+    ]
+    assert [
+        evidence.record.source_image for evidence in result.evidence
+    ] == ["primera.jpg", "segunda.jpg", "tercera.jpg"]
 
 
 def test_consolidation_uses_document_id_as_strong_identity() -> None:

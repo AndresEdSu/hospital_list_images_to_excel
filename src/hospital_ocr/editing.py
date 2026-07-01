@@ -57,7 +57,11 @@ def apply_patient_edits(
         record.document_id = _text(row.get("cedula"))
         record.center = _text(row.get("centro"))
         record.age = _age(row.get("edad"))
-        record.age_unit = _text(row.get("unidad_edad"))
+        record.age_unit = (
+            _text(row.get("unidad_edad"))
+            if record.age is not None
+            else ""
+        )
         record.sex = _text(row.get("sexo")).upper()
         record.origin = _text(row.get("procedencia"))
         record.specialty = _text(row.get("especialidad"))

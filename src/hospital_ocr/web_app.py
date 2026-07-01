@@ -126,9 +126,13 @@ def _process_uploads(
             )
         progress = st.progress(0, text="Preparando OCR…")
 
-        def update_progress(completed: int, total: int, filename: str) -> None:
+        def update_progress(
+            completed: float,
+            total: float,
+            message: str,
+        ) -> None:
             value = completed / total if total else 0
-            progress.progress(value, text=f"{completed}/{total}: {filename}")
+            progress.progress(value, text=f"{value:.0%} · {message}")
 
         config = PipelineConfig(
             images_dir=images_root,
@@ -198,7 +202,8 @@ def _render_editor() -> None:
                 "Sexo", options=["", "M", "F"]
             ),
             "unidad_edad": st.column_config.SelectboxColumn(
-                "Unidad", options=["", "años", "meses", "días"]
+                "Unidad de edad",
+                options=["", "años", "meses", "días"],
             ),
             "especialidad": st.column_config.SelectboxColumn(
                 "Especialidad", options=specialty_options

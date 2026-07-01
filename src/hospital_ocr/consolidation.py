@@ -205,9 +205,14 @@ def _mark_possible_duplicates(records: list[PatientRecord]) -> None:
 
 def consolidate_records(records: list[PatientRecord]) -> ConsolidationResult:
     consolidated: list[PatientRecord] = []
-    evidence_links: list[tuple[PatientRecord, PatientRecord]] = []
+    evidence_links: list[tuple[int, PatientRecord, PatientRecord]] = []
+    first_occurrence: dict[int, int] = {}
 
-    for incoming in sorted(records, key=lambda item: item.confidence, reverse=True):
+    indexed_records = list(enumerate(records))
+    for original_index, incoming in sorted(
+        indexed_records,
+        key=lambda item: (-item[1].confidence, item[0]),
+    ):
         snapshot = deepcopy(incoming)
         if not incoming.source_images:
             incoming.source_images = [incoming.source_image]
@@ -221,21 +226,30 @@ def consolidate_records(records: list[PatientRecord]) -> ConsolidationResult:
         )
         if match is None:
             consolidated.append(incoming)
-            evidence_links.append((snapshot, incoming))
+            first_occurrence[id(incoming)] = original_index
+            evidence_links.append((original_index, snapshot, incoming))
         else:
             _merge_record(match, incoming)
-            evidence_links.append((snapshot, match))
+            first_occurrence[id(match)] = min(
+                first_occurrence[id(match)],
+                original_index,
+            )
+            evidence_links.append((original_index, snapshot, match))
 
-    consolidated.sort(
-        key=lambda item: (
-            item.center,
-            item.specialty,
-            item.area,
-            normalize_text(item.full_name),
-        )
-    )
+    consolidated.sort(key=lambda item: first_occurrence[id(item)])
     for index, record in enumerate(consolidated, start=1):
         record.patient_id = f"PAC-{index:04d}"
+        ordered_images: list[str] = []
+        for _, snapshot, canonical in sorted(
+            evidence_links,
+            key=lambda item: item[0],
+        ):
+            if canonical is not record:
+                continue
+            for image in snapshot.source_images or [snapshot.source_image]:
+                if image not in ordered_images:
+                    ordered_images.append(image)
+        record.source_images = ordered_images
         if record.occurrences > 1:
             record.duplicate_status = "Duplicado consolidado"
             image_count = len(record.source_images)
@@ -251,6 +265,9 @@ def consolidate_records(records: list[PatientRecord]) -> ConsolidationResult:
             patient_id=canonical.patient_id,
             record=snapshot,
         )
-        for index, (snapshot, canonical) in enumerate(evidence_links, start=1)
+        for index, (_, snapshot, canonical) in enumerate(
+            sorted(evidence_links, key=lambda item: item[0]),
+            start=1,
+        )
     ]
     return ConsolidationResult(consolidated, evidence)

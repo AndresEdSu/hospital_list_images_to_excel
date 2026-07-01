@@ -44,11 +44,14 @@ conda activate hospital-ocr
 hospital-ocr-web
 ```
 
-La aplicación abre una página local en el navegador. Permite seleccionar el centro, cargar varias imágenes, seguir el progreso, revisar y corregir pacientes, comparar con las imágenes y descargar el Excel. No expone el servidor fuera de `127.0.0.1` y limita cada archivo a 15 MB.
+La aplicación abre una página local en el navegador. Permite seleccionar el centro, cargar varias imágenes, seguir el progreso por etapa e imagen, revisar y corregir pacientes, comparar con las imágenes y descargar el Excel. No expone el servidor fuera de `127.0.0.1` y limita cada archivo a 15 MB.
 
 Las imágenes seleccionadas en Streamlit pueden estar en cualquier carpeta de
 la computadora. La aplicación las copia a una sesión temporal y les asigna el
 centro escogido; el nombre de su carpeta original no tiene ningún efecto.
+El Excel conserva el orden de carga y el orden visual de arriba hacia abajo
+dentro de cada imagen. Si varias apariciones se consolidan, el paciente mantiene
+la posición de la primera.
 
 Si el centro no aparece en el catálogo, seleccione `Otro centro de salud` y
 escriba su nombre oficial. Este valor se utiliza en el Excel de esa sesión, pero
@@ -132,7 +135,10 @@ ofrecen los mismos modos mediante
 
 `Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
 
-`Pacientes` se entrega como tabla con filtros. `sexo`, `unidad_edad`, `especialidad` y `estado_revision` tienen listas desplegables. Las filas pendientes y los duplicados se resaltan mediante formato condicional.
+`Pacientes` se entrega como tabla con filtros. `sexo`, `unidad_edad` —mostrada
+como `Unidad de edad` en la interfaz—, `especialidad` y `estado_revision` tienen
+listas desplegables. Las filas pendientes y los duplicados se resaltan mediante
+formato condicional.
 
 La cédula es el criterio principal para fusionar apariciones del mismo paciente
 dentro de un centro. Cuando no está disponible, solo se fusionan registros con

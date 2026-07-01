@@ -111,7 +111,7 @@ def _full_row(record: PatientRecord) -> dict[str, Any]:
         "cedula": _safe_excel_text(record.document_id),
         "centro": record.center,
         "edad": record.age,
-        "unidad_edad": record.age_unit,
+        "unidad_edad": record.age_unit if record.age is not None else "",
         "sexo": record.sex,
         "procedencia": _safe_excel_text(record.origin),
         "especialidad": record.specialty,

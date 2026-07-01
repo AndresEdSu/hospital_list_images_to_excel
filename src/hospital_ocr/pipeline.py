@@ -86,7 +86,34 @@ class ProcessingResult:
     specialty_values: tuple[str, ...]
 
 
-ProgressCallback = Callable[[int, int, str], None]
+ProgressCallback = Callable[[float, float, str], None]
+
+_IMAGE_PROGRESS_START = 0.04
+_IMAGE_PROGRESS_END = 0.92
+
+
+def _image_progress(
+    image_index: int,
+    total_images: int,
+    fraction: float,
+) -> float:
+    if total_images <= 0:
+        return _IMAGE_PROGRESS_START
+    bounded_fraction = min(1.0, max(0.0, fraction))
+    completed_images = image_index + bounded_fraction
+    image_share = completed_images / total_images
+    return _IMAGE_PROGRESS_START + image_share * (
+        _IMAGE_PROGRESS_END - _IMAGE_PROGRESS_START
+    )
+
+
+def _report_progress(
+    callback: ProgressCallback | None,
+    value: float,
+    message: str,
+) -> None:
+    if callback:
+        callback(min(1.0, max(0.0, value)), 1.0, message)
 
 
 def _row_audit(
@@ -260,9 +287,17 @@ def process_images(
             )
         raise ValueError(f"No se encontraron imágenes en {config.images_dir}")
 
-    if progress_callback:
-        progress_callback(0, len(selected), "Inicializando el motor OCR")
+    _report_progress(
+        progress_callback,
+        0.0,
+        "Inicializando el motor OCR",
+    )
     engine = PaddleOcrEngine(config.cache_dir)
+    _report_progress(
+        progress_callback,
+        _IMAGE_PROGRESS_START,
+        "Motor OCR listo",
+    )
     extracted: list[PatientRecord] = []
     errors: list[dict[str, str]] = [
         {
@@ -274,7 +309,16 @@ def process_images(
     processed = 0
 
     for index, source in enumerate(selected, start=1):
+        image_index = index - 1
+        image_label = (
+            f"Imagen {index} de {len(selected)}: {source.path.name}"
+        )
         try:
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 0.0),
+                f"{image_label} — preprocesamiento",
+            )
             if config.preprocess:
                 processed_path = (
                     config.interim_dir
@@ -285,6 +329,11 @@ def process_images(
                 preprocess_image(source.path, processed_path)
             else:
                 processed_path = source.path
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 0.14),
+                f"{image_label} — detectando tabla",
+            )
 
             grid_path = (
                 config.interim_dir
@@ -293,6 +342,11 @@ def process_images(
                 / f"{source.path.stem}.jpg"
             )
             grid = detect_table_grid(processed_path, grid_path)
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 0.26),
+                f"{image_label} — aplicando OCR",
+            )
             rows_dir = (
                 config.interim_dir
                 / "handwriting_rows"
@@ -305,6 +359,11 @@ def process_images(
                 grid,
                 config.ocr_mode,
                 rows_dir,
+            )
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 0.78),
+                f"{image_label} — interpretando campos",
             )
             if row_audit is not None:
                 rows_dir.mkdir(parents=True, exist_ok=True)
@@ -330,6 +389,11 @@ def process_images(
                     grid,
                 )
             )
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 0.96),
+                f"{image_label} — finalizando",
+            )
             processed += 1
         except Exception as error:  # El lote debe continuar y dejar trazabilidad.
             errors.append(
@@ -339,9 +403,17 @@ def process_images(
                 }
             )
         finally:
-            if progress_callback:
-                progress_callback(index, len(selected), source.path.name)
+            _report_progress(
+                progress_callback,
+                _image_progress(image_index, len(selected), 1.0),
+                f"{image_label} — completada",
+            )
 
+    _report_progress(
+        progress_callback,
+        0.94,
+        "Consolidando registros y duplicados",
+    )
     config.interim_dir.mkdir(parents=True, exist_ok=True)
     (config.interim_dir / "errores.json").write_text(
         json.dumps(errors, ensure_ascii=False, indent=2),
@@ -350,7 +422,7 @@ def process_images(
 
     consolidation = consolidate_records(extracted)
     consolidated = consolidation.patients
-    return ProcessingResult(
+    result = ProcessingResult(
         consolidation=consolidation,
         discovered_images=len(discovered),
         processed_images=processed,
@@ -359,6 +431,12 @@ def process_images(
         errors=tuple(errors),
         specialty_values=tuple(sorted({item.specialty for item in specialties})),
     )
+    _report_progress(
+        progress_callback,
+        1.0,
+        "Procesamiento completado",
+    )
+    return result
 
 
 def run_pipeline(config: PipelineConfig) -> PipelineReport:

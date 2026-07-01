@@ -4,7 +4,7 @@ from PIL import Image
 
 from hospital_ocr.handwriting import GridCell, TextRow, rows_from_grid
 from hospital_ocr.models import GridBoundary, OcrLine, TableGrid
-from hospital_ocr.pipeline import _recognize_image
+from hospital_ocr.pipeline import _image_progress, _recognize_image
 
 
 class FakeOcrEngine:
@@ -129,3 +129,19 @@ def test_printed_mode_uses_only_global_ocr(tmp_path: Path) -> None:
     assert engine.global_calls == 1
     assert engine.row_calls == 0
     assert audit is None
+
+
+def test_image_progress_advances_through_each_processing_stage() -> None:
+    values = [
+        _image_progress(0, 2, fraction)
+        for fraction in (0.0, 0.14, 0.26, 0.78, 0.96, 1.0)
+    ]
+    values.extend(
+        _image_progress(1, 2, fraction)
+        for fraction in (0.0, 0.14, 0.26, 0.78, 0.96, 1.0)
+    )
+
+    assert values == sorted(values)
+    assert len(set(values)) == 11
+    assert values[0] == 0.04
+    assert values[-1] == 0.92
