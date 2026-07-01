@@ -19,6 +19,8 @@ def test_streamlit_home_page_starts_without_errors() -> None:
     assert [selectbox.label for selectbox in app.selectbox] == [
         "Centro hospitalario"
     ]
+    assert [radio.label for radio in app.radio] == ["Tipo de texto"]
+    assert app.radio[0].options == ["Automático", "Manuscrito", "Impreso"]
     assert len(app.get("file_uploader")) == 1
 
 

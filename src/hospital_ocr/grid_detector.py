@@ -131,6 +131,40 @@ def _grid_confidence(
     return round(0.40 * row_score + 0.35 * column_score + 0.25 * support_score, 4)
 
 
+def _complete_cropped_horizontal_edge(
+    boundaries: tuple[GridBoundary, ...],
+    *,
+    image_width: int,
+    image_height: int,
+) -> tuple[GridBoundary, ...]:
+    if len(boundaries) < 4:
+        return boundaries
+    reference = image_width / 2
+    positions = [line.coordinate_at(reference) for line in boundaries]
+    spacings = [
+        right - left
+        for left, right in zip(positions, positions[1:], strict=False)
+        if right > left
+    ]
+    if not spacings:
+        return boundaries
+    typical_spacing = median(spacings[-min(8, len(spacings)) :])
+    bottom_gap = image_height - positions[-1]
+    minimum_edge_gap = max(6.0, image_height * 0.008)
+    if not minimum_edge_gap < bottom_gap < typical_spacing * 1.60:
+        return boundaries
+
+    family = boundaries[-min(5, len(boundaries)) :]
+    slope = median(line.slope for line in family)
+    target = positions[-1] + typical_spacing
+    inferred = GridBoundary(
+        slope=slope,
+        intercept=target - slope * reference,
+        support=min(0.50, median(line.support for line in family)),
+    )
+    return (*boundaries, inferred)
+
+
 def _save_debug_overlay(
     image: np.ndarray,
     grid: TableGrid,
@@ -213,6 +247,11 @@ def detect_table_grid(
         reference_position=width / 2,
         dimension=width,
         tolerance=max(4.0, height * 0.006),
+    )
+    horizontal = _complete_cropped_horizontal_edge(
+        horizontal,
+        image_width=width,
+        image_height=height,
     )
     vertical = _cluster_boundaries(
         vertical_segments,

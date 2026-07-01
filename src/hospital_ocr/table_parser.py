@@ -356,9 +356,182 @@ def _infer_schema(
             confidence,
             grid_index,
         )
-    return _TableSchema(
+    schema = _TableSchema(
         columns=columns,
         header_bottom=max(item.line.box[3] for item in header_cluster) + 4,
+        confidence=sum(column.confidence for column in columns.values())
+        / len(columns),
+    )
+    return _complete_partial_schema(schema, lines, grid)
+
+
+def _complete_partial_schema(
+    schema: _TableSchema,
+    lines: list[OcrLine],
+    grid: TableGrid | None,
+) -> _TableSchema:
+    if grid is None or "name" not in schema.columns:
+        return schema
+
+    used_grid_indexes = {
+        column.grid_index
+        for field, column in schema.columns.items()
+        if column.grid_index is not None
+        and not field.startswith("ignored_unknown_")
+    }
+    name_grid_index = schema.columns["name"].grid_index
+    by_column_and_row: dict[int, dict[int, list[OcrLine]]] = {}
+    for line in lines:
+        if line.center_y <= schema.header_bottom:
+            continue
+        column_index = grid.column_for_box(line.box)
+        row_index = grid.row_for_box(line.box)
+        if column_index is None or row_index is None:
+            continue
+        by_column_and_row.setdefault(column_index, {}).setdefault(
+            row_index,
+            [],
+        ).append(line)
+
+    candidate_indexes = [
+        index
+        for index in by_column_and_row
+        if index not in used_grid_indexes
+        and (
+            name_grid_index is None
+            or index > name_grid_index
+        )
+    ]
+    if not candidate_indexes:
+        return schema
+
+    row_texts = {
+        column_index: [
+            clean_display_text(
+                " ".join(
+                    line.text
+                    for line in sorted(row_lines, key=lambda item: item.center_x)
+                )
+            )
+            for row_lines in rows.values()
+        ]
+        for column_index, rows in by_column_and_row.items()
+    }
+
+    selected: dict[str, tuple[int, float]] = {}
+
+    if "document" not in schema.columns:
+        document_candidates = []
+        for column_index in candidate_indexes:
+            texts = row_texts[column_index]
+            matches = sum(bool(DOCUMENT_RE.search(text)) for text in texts)
+            if matches >= 2:
+                document_candidates.append(
+                    (
+                        matches,
+                        matches / max(1, len(texts)),
+                        -column_index,
+                        column_index,
+                    )
+                )
+        if document_candidates:
+            matches, ratio, _, column_index = max(document_candidates)
+            selected["document"] = (
+                column_index,
+                min(0.94, 0.72 + 0.18 * ratio + 0.01 * matches),
+            )
+
+    unavailable = {
+        *used_grid_indexes,
+        *(column_index for column_index, _ in selected.values()),
+    }
+    if "sex" not in schema.columns:
+        sex_candidates = []
+        for column_index in candidate_indexes:
+            if column_index in unavailable:
+                continue
+            texts = row_texts[column_index]
+            matches = sum(
+                re.sub(r"[^A-Za-z]", "", text).upper()
+                in {"M", "F", "H", "N"}
+                for text in texts
+            )
+            if matches >= 2:
+                sex_candidates.append(
+                    (
+                        matches,
+                        matches / max(1, len(texts)),
+                        column_index,
+                    )
+                )
+        if sex_candidates:
+            matches, ratio, column_index = max(sex_candidates)
+            selected["sex"] = (
+                column_index,
+                min(0.94, 0.72 + 0.18 * ratio + 0.01 * matches),
+            )
+
+    unavailable.update(
+        column_index for column_index, _ in selected.values()
+    )
+    if "age" not in schema.columns:
+        age_candidates = []
+        for column_index in candidate_indexes:
+            if column_index in unavailable:
+                continue
+            texts = row_texts[column_index]
+            ages = [
+                _ocr_number(text)
+                for text in texts
+                if not DOCUMENT_RE.search(text)
+            ]
+            matches = sum(age is not None for age in ages)
+            if matches >= 2:
+                age_candidates.append(
+                    (
+                        matches,
+                        matches / max(1, len(texts)),
+                        -column_index,
+                        column_index,
+                    )
+                )
+        if age_candidates:
+            matches, ratio, _, column_index = max(age_candidates)
+            selected["age"] = (
+                column_index,
+                min(0.92, 0.70 + 0.17 * ratio + 0.01 * matches),
+            )
+
+    if not selected:
+        return schema
+
+    columns = dict(schema.columns)
+    width = max(1, lines[0].image_width)
+    representative_y = schema.header_bottom + 1
+    for field, (grid_index, confidence) in selected.items():
+        columns = {
+            existing_field: column
+            for existing_field, column in columns.items()
+            if not (
+                existing_field.startswith("ignored_unknown_")
+                and column.grid_index == grid_index
+            )
+        }
+        left = grid.vertical[grid_index].coordinate_at(representative_y)
+        right = grid.vertical[grid_index + 1].coordinate_at(representative_y)
+        start = max(0.0, min(left, right) / width)
+        end = min(1.0, max(left, right) / width)
+        columns[field] = _Column(
+            field=field,
+            center=(start + end) / 2,
+            start=start,
+            end=end,
+            confidence=confidence,
+            grid_index=grid_index,
+        )
+    return _TableSchema(
+        columns=columns,
+        header_bottom=schema.header_bottom,
         confidence=sum(column.confidence for column in columns.values())
         / len(columns),
     )
@@ -989,6 +1162,43 @@ def _joined_cell_text(lines: list[OcrLine]) -> str:
     )
 
 
+def _grid_header_row(
+    lines: list[OcrLine],
+    grid: TableGrid | None,
+) -> int | None:
+    if grid is None:
+        return None
+    fields_by_row: dict[int, set[str]] = {}
+    text_by_row: dict[int, list[str]] = {}
+    for line in lines:
+        row = grid.row_for_box(line.box)
+        if row is None:
+            continue
+        text_by_row.setdefault(row, []).append(normalize_text(line.text))
+        candidate = _header_candidate(line)
+        if candidate is not None:
+            fields_by_row.setdefault(row, set()).add(candidate.field)
+
+    candidates: list[tuple[int, int]] = []
+    for row, texts in text_by_row.items():
+        fields = set(fields_by_row.get(row, set()))
+        compact = re.sub(r"\s+", "", " ".join(texts))
+        for field, aliases in HEADER_ALIASES.items():
+            if any(
+                re.sub(r"\s+", "", alias) in compact
+                for alias in aliases
+                if len(re.sub(r"\s+", "", alias)) >= 4
+            ):
+                fields.add(field)
+        has_name = "name" in fields
+        if has_name and len(fields) >= 2:
+            candidates.append((len(fields), row))
+    if not candidates:
+        return None
+    best_score = max(score for score, _ in candidates)
+    return min(row for score, row in candidates if score == best_score)
+
+
 def parse_table_lines(
     lines: list[OcrLine],
     name_lexicons: NameLexicons,
@@ -1003,11 +1213,22 @@ def parse_table_lines(
     if not looks_like_table(lines, grid):
         return None
     schema = _infer_schema(lines, grid)
-    data_lines = (
-        [line for line in lines if line.center_y > schema.header_bottom]
-        if schema
-        else lines
-    )
+    grid_header_row = _grid_header_row(lines, grid)
+    if grid_header_row is not None and grid is not None:
+        data_lines = [
+            line
+            for line in lines
+            if (
+                (row := grid.row_for_box(line.box)) is not None
+                and row > grid_header_row
+            )
+        ]
+    else:
+        data_lines = (
+            [line for line in lines if line.center_y > schema.header_bottom]
+            if schema
+            else lines
+        )
     anchors = _find_row_anchors(data_lines, schema, grid)
     if len(anchors) < 2:
         return []
@@ -1015,7 +1236,13 @@ def parse_table_lines(
     headerless_index_ids = (
         _infer_headerless_index_ids(data_lines) if schema is None else set()
     )
-    header_cutoff = schema.header_bottom if schema else _header_cutoff(lines)
+    header_cutoff = (
+        None
+        if grid_header_row is not None
+        else schema.header_bottom
+        if schema
+        else _header_cutoff(lines)
+    )
     page_specialty: tuple[str, str] | None = None
     if schema:
         for line in sorted(lines, key=lambda item: item.center_y):

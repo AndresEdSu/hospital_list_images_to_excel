@@ -417,6 +417,54 @@ def test_slanted_grid_keeps_distant_cells_in_the_same_row() -> None:
     assert records[2].origin == ""
 
 
+def test_partial_grid_header_infers_missing_document_age_and_sex() -> None:
+    grid = TableGrid(
+        tuple(GridBoundary(0.0, position, 1.0) for position in (0, 40, 80, 120, 160)),
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (0, 100, 400, 550, 650, 750, 1000)
+        ),
+        1.0,
+    )
+    lines = [
+        table_line("Nombre y Apellido", 20, 120, 370),
+        table_line("Procedencia", 20, 780, 950),
+    ]
+    for index, (name, document, age, sex) in enumerate(
+        [
+            ("MarÃ­a PÃ©rez", "12345678", "14", "F"),
+            ("Luis GÃ³mez", "87654321", "20", "M"),
+            ("Ana Rivera", "11223344", "15", "F"),
+        ]
+    ):
+        y = 35 + index * 40
+        lines.extend(
+            [
+                table_line(name, y, 120, 370),
+                table_line(document, y, 420, 530),
+                table_line(age, y, 570, 620),
+                table_line(sex, y, 680, 720),
+                table_line("Petare", y, 780, 930),
+            ]
+        )
+
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "encabezado_parcial.jpg",
+        [Place("petare", "Petare")],
+        grid,
+    )
+
+    assert len(records) == 3
+    assert records[0].document_id == "12345678"
+    assert records[0].age == 14
+    assert records[0].sex == "F"
+    assert records[0].origin == "Petare"
+
+
 def test_short_name_list_is_not_assumed_to_be_table() -> None:
     lines = [
         table_line("María Pérez", 100, 100, 270),

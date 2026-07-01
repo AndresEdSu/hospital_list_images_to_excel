@@ -121,6 +121,15 @@ solapadas; luego sus fragmentos se alinean de nuevo en una sola fila lógica.
 Los recortes y el resumen de cobertura se guardan en
 `data/interim/handwriting_rows/` para auditoría.
 
+La interfaz permite seleccionar `Automático`, `Manuscrito` o `Impreso`.
+En listas sin cuadrícula, `Manuscrito` procesa directamente todos los
+renglones reforzados. Cuando existe una cuadrícula, rectifica sus celdas con
+perspectiva, conserva su fila y columna de origen y compara esos resultados con
+el OCR global para no degradar celdas que ya se leyeron correctamente.
+`Impreso` desactiva por completo el pase reforzado. En la línea de comandos se
+ofrecen los mismos modos mediante
+`--ocr-mode auto|handwritten|printed`.
+
 `Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
 
 `Pacientes` se entrega como tabla con filtros. `sexo`, `unidad_edad`, `especialidad` y `estado_revision` tienen listas desplegables. Las filas pendientes y los duplicados se resaltan mediante formato condicional.

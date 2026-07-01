@@ -8,7 +8,7 @@ import streamlit as st
 from hospital_ocr.catalogs import load_centers, write_center_catalog
 from hospital_ocr.editing import apply_patient_edits
 from hospital_ocr.exporting import export_results, patient_records_dataframe
-from hospital_ocr.pipeline import PipelineConfig, process_images
+from hospital_ocr.pipeline import OcrMode, PipelineConfig, process_images
 from hospital_ocr.web_service import (
     cleanup_old_sessions,
     create_session,
@@ -103,6 +103,7 @@ def _process_uploads(
     uploaded_files: list[object],
     center_slug: str,
     custom_center_name: str = "",
+    ocr_mode: OcrMode = "auto",
 ) -> None:
     if st.session_state.get("session_dir"):
         _clear_current_session()
@@ -140,6 +141,7 @@ def _process_uploads(
             output_path=session_dir / "pacientes.xlsx",
             cache_dir=PROJECT_ROOT / ".cache" / "paddlex",
             overwrite=True,
+            ocr_mode=ocr_mode,
         )
         result = process_images(config, progress_callback=update_progress)
         progress.empty()
@@ -297,6 +299,21 @@ def main() -> None:
             max_chars=120,
             help="Escriba el nombre oficial y, si es necesario, la ciudad o el estado.",
         ).strip()
+    ocr_mode_label = st.radio(
+        "Tipo de texto",
+        ["Automático", "Manuscrito", "Impreso"],
+        horizontal=True,
+        help=(
+            "Automático activa el refuerzo cuando detecta baja cobertura; "
+            "Manuscrito refuerza renglones y rectifica celdas de cuadrícula; "
+            "Impreso utiliza solamente el OCR normal."
+        ),
+    )
+    ocr_mode: OcrMode = {
+        "Automático": "auto",
+        "Manuscrito": "handwritten",
+        "Impreso": "printed",
+    }[ocr_mode_label]
     uploads = st.file_uploader(
         "Imágenes de listas",
         type=["jpg", "jpeg", "png", "webp", "tif", "tiff"],
@@ -315,6 +332,7 @@ def main() -> None:
                 list(uploads),
                 center_slug,
                 custom_center_name,
+                ocr_mode,
             )
             st.success("Procesamiento terminado. Revise los datos antes de descargar.")
         except Exception as error:

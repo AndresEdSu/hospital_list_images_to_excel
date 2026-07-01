@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Envía las imágenes originales directamente al OCR.",
     )
     parser.add_argument(
+        "--ocr-mode",
+        choices=["auto", "handwritten", "printed"],
+        default="auto",
+        help="Selecciona OCR automático, manuscrito reforzado o solamente impreso.",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Permite reemplazar un archivo de salida existente.",
@@ -68,6 +74,7 @@ def main(argv: list[str] | None = None) -> None:
             limit=args.limit,
             preprocess=not args.skip_preprocessing,
             overwrite=args.force,
+            ocr_mode=args.ocr_mode,
         )
     )
     print(f"Imágenes encontradas: {report.discovered_images}")

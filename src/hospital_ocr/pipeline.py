@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Literal
 
 from hospital_ocr.catalogs import load_centers, load_places, load_specialties
 from hospital_ocr.consolidation import consolidate_records
@@ -15,16 +15,29 @@ from hospital_ocr.discovery import (
 from hospital_ocr.exporting import export_results
 from hospital_ocr.grid_detector import detect_table_grid
 from hospital_ocr.handwriting import (
+    TextRow,
+    cells_from_grid,
     detect_text_rows,
+    merge_grid_ocr,
     merge_row_ocr,
     needs_row_ocr,
     row_ocr_coverage,
+    rows_from_grid,
 )
-from hospital_ocr.models import ConsolidationResult, PatientRecord
+from hospital_ocr.models import (
+    ConsolidationResult,
+    OcrLine,
+    PatientRecord,
+    TableGrid,
+)
 from hospital_ocr.name_splitter import load_name_lexicons
 from hospital_ocr.ocr_engine import PaddleOcrEngine, save_raw_ocr
 from hospital_ocr.parsing import parse_ocr_lines
 from hospital_ocr.preprocessing import preprocess_image
+
+
+OcrMode = Literal["auto", "handwritten", "printed"]
+OCR_MODES: tuple[OcrMode, ...] = ("auto", "handwritten", "printed")
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,14 @@ class PipelineConfig:
     preprocess: bool = True
     overwrite: bool = False
     places_path: Path | None = None
+    ocr_mode: OcrMode = "auto"
+
+    def __post_init__(self) -> None:
+        if self.ocr_mode not in OCR_MODES:
+            raise ValueError(
+                f"Modo OCR no válido: {self.ocr_mode}. "
+                f"Use {', '.join(OCR_MODES)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -66,6 +87,148 @@ class ProcessingResult:
 
 
 ProgressCallback = Callable[[int, int, str], None]
+
+
+def _row_audit(
+    *,
+    mode: OcrMode,
+    rows: list[TextRow],
+    lines: list[OcrLine],
+    coverage_before: float | None,
+    boundary_source: str,
+    fallback_reason: str = "",
+    grid: TableGrid | None = None,
+) -> dict[str, Any]:
+    if grid is not None:
+        covered_grid_rows = {
+            row
+            for line in lines
+            if (row := grid.row_for_box(line.box)) is not None
+        }
+        coverage_after = len(covered_grid_rows) / max(
+            1,
+            len(grid.horizontal) - 1,
+        )
+    else:
+        coverage_after = row_ocr_coverage(lines, rows) if rows else None
+    return {
+        "modo": mode,
+        "procesamiento_reforzado": bool(rows),
+        "origen_limites": boundary_source,
+        "motivo_respaldo": fallback_reason,
+        "cobertura_antes": (
+            round(coverage_before, 4)
+            if coverage_before is not None
+            else None
+        ),
+        "cobertura_despues": (
+            round(coverage_after, 4)
+            if coverage_after is not None
+            else None
+        ),
+        "renglones": [
+            {
+                "caja": list(row.box),
+                "linea_base": round(row.center_y, 2),
+                "fuerza": round(row.strength, 4),
+            }
+            for row in rows
+        ],
+    }
+
+
+def _grid_row_coverage(
+    lines: list[OcrLine],
+    grid: TableGrid,
+) -> float:
+    covered_rows = {
+        row
+        for line in lines
+        if (row := grid.row_for_box(line.box)) is not None
+    }
+    return len(covered_rows) / max(1, len(grid.horizontal) - 1)
+
+
+def _recognize_image(
+    engine: PaddleOcrEngine,
+    image_path: Path,
+    grid: TableGrid | None,
+    mode: OcrMode,
+    rows_dir: Path,
+) -> tuple[list[OcrLine], dict[str, Any] | None]:
+    if mode == "printed":
+        return engine.recognize(image_path), None
+
+    if mode == "handwritten":
+        rows = (
+            rows_from_grid(image_path, grid)
+            if grid is not None
+            else detect_text_rows(image_path)
+        )
+        boundary_source = "cuadrícula" if grid is not None else "renglones"
+        if not rows:
+            lines = engine.recognize(image_path)
+            return lines, _row_audit(
+                mode=mode,
+                rows=[],
+                lines=lines,
+                coverage_before=None,
+                boundary_source=boundary_source,
+                fallback_reason=(
+                    "No se pudieron delimitar recortes; se usó OCR global."
+                ),
+                grid=grid,
+            )
+        if grid is not None:
+            initial_lines = engine.recognize(image_path)
+            refined_lines = engine.recognize_grid_cells(
+                image_path,
+                cells_from_grid(grid),
+                rows_dir,
+            )
+            lines = merge_grid_ocr(initial_lines, refined_lines, grid)
+            coverage_before = _grid_row_coverage(initial_lines, grid)
+        else:
+            segmented_lines = engine.recognize_rows(
+                image_path,
+                rows,
+                rows_dir,
+            )
+            lines = merge_row_ocr(
+                [],
+                segmented_lines,
+                rows,
+            )
+            coverage_before = None
+        return lines, _row_audit(
+            mode=mode,
+            rows=rows,
+            lines=lines,
+            coverage_before=coverage_before,
+            boundary_source=boundary_source,
+            grid=grid,
+        )
+
+    initial_lines = engine.recognize(image_path)
+    if grid is not None:
+        return initial_lines, None
+    rows = detect_text_rows(image_path)
+    if not needs_row_ocr(initial_lines, rows):
+        return initial_lines, None
+    coverage_before = row_ocr_coverage(initial_lines, rows)
+    segmented_lines = engine.recognize_rows(
+        image_path,
+        rows,
+        rows_dir,
+    )
+    lines = merge_row_ocr(initial_lines, segmented_lines, rows)
+    return lines, _row_audit(
+        mode=mode,
+        rows=rows,
+        lines=lines,
+        coverage_before=coverage_before,
+        boundary_source="renglones",
+    )
 
 
 def process_images(
@@ -130,45 +293,25 @@ def process_images(
                 / f"{source.path.stem}.jpg"
             )
             grid = detect_table_grid(processed_path, grid_path)
-            lines = engine.recognize(processed_path)
-            if grid is None:
-                rows = detect_text_rows(processed_path)
-                if needs_row_ocr(lines, rows):
-                    coverage_before = row_ocr_coverage(lines, rows)
-                    rows_dir = (
-                        config.interim_dir
-                        / "handwriting_rows"
-                        / source.center_slug
-                        / source.path.stem
-                    )
-                    segmented_lines = engine.recognize_rows(
-                        processed_path,
-                        rows,
-                        rows_dir,
-                    )
-                    lines = merge_row_ocr(lines, segmented_lines, rows)
-                    (rows_dir / "audit.json").write_text(
-                        json.dumps(
-                            {
-                                "fallback_activado": True,
-                                "cobertura_antes": round(coverage_before, 4),
-                                "cobertura_despues": round(
-                                    row_ocr_coverage(lines, rows),
-                                    4,
-                                ),
-                                "renglones": [
-                                    {
-                                        "caja": list(row.box),
-                                        "fuerza": round(row.strength, 4),
-                                    }
-                                    for row in rows
-                                ],
-                            },
-                            ensure_ascii=False,
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                    )
+            rows_dir = (
+                config.interim_dir
+                / "handwriting_rows"
+                / source.center_slug
+                / source.path.stem
+            )
+            lines, row_audit = _recognize_image(
+                engine,
+                processed_path,
+                grid,
+                config.ocr_mode,
+                rows_dir,
+            )
+            if row_audit is not None:
+                rows_dir.mkdir(parents=True, exist_ok=True)
+                (rows_dir / "audit.json").write_text(
+                    json.dumps(row_audit, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             raw_path = (
                 config.interim_dir
                 / "ocr"
