@@ -149,6 +149,16 @@ Las procedencias y especialidades también comparan aliases en una representaci�
 compacta para tolerar espacios insertados o eliminados por el OCR. Las
 coincidencias más largas y específicas tienen prioridad sobre aliases parciales.
 Esta corrección de espacios no se aplica automáticamente a nombres personales.
+Dentro de una columna confirmada como procedencia, una coincidencia OCR más
+tolerante se acepta solamente cuando el mejor lugar del catálogo supera el
+umbral contextual y aventaja claramente al segundo candidato. El valor canónico
+se exporta y la normalización queda indicada para revisión.
+
+En una columna confirmada como sexo, `F` y `M` tienen prioridad. `H` se
+normaliza a `M`; las confusiones OCR `T`, `E` o `P` se interpretan como `F` y
+`N` como `M`, siempre marcadas para revisión. Si aparecen valores incompatibles
+como `F` y `M`, el campo queda vacío. En todos los casos
+`linea_ocr_original` conserva la fila reconocida sin modificar.
 
 La hoja `Pacientes` incluye confianzas separadas para nombre, cédula, edad,
 procedencia y especialidad, además de la evidencia usada para clasificar cada

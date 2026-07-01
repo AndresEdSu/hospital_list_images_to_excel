@@ -144,6 +144,13 @@ class _TableSchema:
     confidence: float
 
 
+@dataclass(frozen=True)
+class _SexResult:
+    value: str
+    normalized_from: tuple[str, ...] = ()
+    conflict: bool = False
+
+
 def _text_height(line: OcrLine) -> int:
     return max(1, line.box[3] - line.box[1])
 
@@ -1072,14 +1079,52 @@ def _extract_schema_age(lines: list[OcrLine]) -> int | None:
     return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
 
-def _extract_schema_sex(lines: list[OcrLine]) -> str:
-    for line in sorted(lines, key=lambda item: item.score, reverse=True):
+def _extract_schema_sex(
+    lines: list[OcrLine],
+    *,
+    allow_ocr_confusions: bool = False,
+) -> _SexResult:
+    candidates: dict[str, list[tuple[str, float]]] = {}
+    direct_mapping = {"F": "F", "M": "M", "H": "M"}
+    confusion_mapping = {"T": "F", "E": "F", "P": "F", "N": "M"}
+    for line in lines:
         marker = re.sub(r"[^A-Za-z]", "", line.text).upper()
-        if marker in {"M", "H", "N"}:
-            return "M"
-        if marker == "F":
-            return "F"
-    return ""
+        value = direct_mapping.get(marker)
+        if value is None and allow_ocr_confusions:
+            value = confusion_mapping.get(marker)
+        if value is not None:
+            candidates.setdefault(value, []).append((marker, line.score))
+    if len(candidates) > 1:
+        markers = tuple(
+            sorted(
+                {
+                    marker
+                    for values in candidates.values()
+                    for marker, _ in values
+                }
+            )
+        )
+        return _SexResult("", markers, conflict=True)
+    if not candidates:
+        return _SexResult("")
+
+    value, values = next(iter(candidates.items()))
+    canonical_present = any(marker == value for marker, _ in values)
+    normalized_from = (
+        ()
+        if canonical_present
+        else tuple(
+            dict.fromkeys(
+                marker
+                for marker, _ in sorted(
+                    values,
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+            )
+        )
+    )
+    return _SexResult(value, normalized_from)
 
 
 def _average_score(lines: list[OcrLine], fallback: float = 0.0) -> float:
@@ -1279,7 +1324,11 @@ def parse_table_lines(
             document_id = _extract_document(document_lines)
             age = _extract_schema_age(age_lines)
             age_unit = "años" if age is not None else ""
-            sex = _extract_schema_sex(sex_lines)
+            sex_result = _extract_schema_sex(
+                sex_lines,
+                allow_ocr_confusions=True,
+            )
+            sex = sex_result.value
             origin_text = _schema_text(
                 row_lines, schema, "origin", grid
             )
@@ -1291,7 +1340,8 @@ def parse_table_lines(
             field_lines = _headerless_field_lines(row_lines, anchor, grid)
             document_id = _extract_document(field_lines)
             age, age_unit = _extract_semantic_age(field_lines)
-            sex = _extract_schema_sex(field_lines)
+            sex_result = _extract_schema_sex(field_lines)
+            sex = sex_result.value
             semantic_text = _joined_cell_text(field_lines)
             origin_text = semantic_text
             specialty_text = semantic_text
@@ -1302,8 +1352,12 @@ def parse_table_lines(
             origin_lines = field_lines
             specialty_lines = field_lines
 
-        place = match_place(origin_text, places)
         has_explicit_origin = bool(schema and "origin" in schema.columns)
+        place = match_place(
+            origin_text,
+            places,
+            contextual=has_explicit_origin,
+        )
         origin = (
             place.name
             if place
@@ -1324,12 +1378,26 @@ def parse_table_lines(
             notes.append("Separación de nombre no confiable")
         if age is None:
             notes.append("Edad no reconocida")
-        if not sex:
+        if sex_result.conflict:
+            notes.append(
+                "Sexo ambiguo entre valores incompatibles: "
+                + "/".join(sex_result.normalized_from)
+            )
+        elif not sex:
             notes.append("Sexo no reconocido")
+        elif sex_result.normalized_from:
+            notes.append(
+                "Sexo normalizado desde OCR: "
+                + "/".join(sex_result.normalized_from)
+            )
         if not origin:
             notes.append("Procedencia no reconocida")
         elif has_explicit_origin and places and place is None:
             notes.append("Procedencia no validada en catálogo")
+        elif place and place.contextual:
+            notes.append(
+                "Procedencia normalizada por coincidencia contextual"
+            )
         if specialty_text and detected_specialty is None:
             notes.append("Especialidad o área no reconocida")
 
@@ -1401,8 +1469,23 @@ def parse_table_lines(
                     if age is not None
                     else ""
                 ),
+                "sexo": (
+                    "conjunto cerrado y columna inferida por encabezado"
+                    + (
+                        "; normalizado desde "
+                        + "/".join(sex_result.normalized_from)
+                        if sex_result.normalized_from
+                        else ""
+                    )
+                    if sex
+                    else ""
+                ),
                 "procedencia": (
-                    "cuadrícula, encabezado y catálogo geográfico"
+                    "cuadrícula, encabezado y catálogo geográfico contextual"
+                    if grid and place and place.contextual
+                    else "encabezado y catálogo geográfico contextual"
+                    if place and place.contextual
+                    else "cuadrícula, encabezado y catálogo geográfico"
                     if grid and place
                     else "encabezado y catálogo geográfico"
                     if place
@@ -1438,6 +1521,17 @@ def parse_table_lines(
                 ),
                 "cédula": "formato de documento en la fila" if document_id else "",
                 "edad": "formato de edad en la fila" if age is not None else "",
+                "sexo": (
+                    "valor cerrado en la fila"
+                    + (
+                        "; normalizado desde "
+                        + "/".join(sex_result.normalized_from)
+                        if sex_result.normalized_from
+                        else ""
+                    )
+                    if sex
+                    else ""
+                ),
                 "procedencia": (
                     "catálogo geográfico en celda física sin encabezado"
                     if grid and place

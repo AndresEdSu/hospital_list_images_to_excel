@@ -139,6 +139,28 @@ def test_place_match_tolerates_ocr_space_changes_and_prefers_specific_alias() ->
     assert short is not None and short.name == "Catia"
 
 
+def test_contextual_place_match_requires_a_clear_catalog_winner() -> None:
+    places = [
+        Place("guaira", "La Guaira"),
+        Place("guatire", "Guatire"),
+    ]
+
+    assert match_place("Guaina", places) is None
+    contextual = match_place("Guaina", places, contextual=True)
+
+    assert contextual is not None
+    assert contextual.name == "La Guaira"
+    assert contextual.contextual
+    assert contextual.score - contextual.runner_up_score >= 0.06
+
+    ambiguous = match_place(
+        "Guaixa",
+        [Place("guaira", "La Guaira"), Place("guaina", "Otro lugar")],
+        contextual=True,
+    )
+    assert ambiguous is None
+
+
 def test_specialty_match_tolerates_removed_space() -> None:
     specialties = [
         Specialty("medicina", "Medicina general", ""),
@@ -649,6 +671,62 @@ def test_explicit_origin_column_preserves_unknown_value_for_review() -> None:
     assert len(records) == 2
     assert records[0].origin == "Sector no catalogado"
     assert "Procedencia no validada en catálogo" in records[0].notes
+
+
+def test_explicit_origin_column_uses_contextual_catalog_match() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Paciente", 20, 100, 300),
+            table_line("Procedencia", 20, 600, 850),
+            table_line("María Pérez", 100, 110, 290),
+            table_line("Guaina", 100, 620, 800),
+            table_line("Luis Gómez", 145, 110, 280),
+            table_line("Guatire", 145, 620, 800),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "procedencia_contextual.jpg",
+        [Place("guaira", "La Guaira"), Place("guatire", "Guatire")],
+    )
+
+    assert len(records) == 2
+    assert records[0].origin == "La Guaira"
+    assert "Guaina" in records[0].raw_line
+    assert "Procedencia normalizada por coincidencia contextual" in records[0].notes
+    assert "contextual" in records[0].field_evidence["procedencia"]
+    assert records[1].origin == "Guatire"
+
+
+def test_explicit_sex_column_normalizes_confusions_and_rejects_conflict() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Paciente", 20, 100, 300),
+            table_line("Sexo", 20, 450, 520),
+            table_line("María Pérez", 100, 110, 290),
+            table_line("T", 100, 460, 500),
+            table_line("Luis Gómez", 145, 110, 280),
+            table_line("N", 145, 460, 500),
+            table_line("María Gómez", 190, 110, 290),
+            table_line("F", 190, 455, 480),
+            table_line("M", 190, 485, 510),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "sexo_contextual.jpg",
+        [],
+    )
+
+    assert len(records) == 3
+    assert records[0].sex == "F"
+    assert "T" in records[0].raw_line
+    assert "Sexo normalizado desde OCR: T" in records[0].notes
+    assert "normalizado desde T" in records[0].field_evidence["sexo"]
+    assert records[1].sex == "M"
+    assert "Sexo normalizado desde OCR: N" in records[1].notes
+    assert records[2].sex == ""
+    assert "Sexo ambiguo entre valores incompatibles: F/M" in records[2].notes
 
 
 def test_age_at_start_is_allowed_when_unit_is_explicit() -> None:

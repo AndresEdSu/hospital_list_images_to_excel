@@ -16,6 +16,8 @@ class PlaceMatch:
     name: str
     score: float
     alias: str
+    contextual: bool = False
+    runner_up_score: float = 0.0
 
 
 def _word_windows(text: str, size: int) -> list[str]:
@@ -128,35 +130,88 @@ def detect_specialty(
     return None
 
 
-def match_place(text: str, places: list[Place]) -> PlaceMatch | None:
+def _rank_place_matches(
+    normalized_text: str,
+    places: list[Place],
+) -> list[PlaceMatch]:
+    by_place: dict[str, PlaceMatch] = {}
+    for place in places:
+        strong_score = _strong_alias_score(normalized_text, place.alias)
+        fuzzy_score = (
+            _fuzzy_alias_score(normalized_text, place.alias)
+            if len(place.alias) >= 5
+            else 0.0
+        )
+        score = max(strong_score, fuzzy_score)
+        if score <= 0:
+            continue
+        candidate = PlaceMatch(place.name, score, place.alias)
+        current = by_place.get(place.name)
+        if current is None or (
+            candidate.score,
+            len(_compact(candidate.alias)),
+        ) > (
+            current.score,
+            len(_compact(current.alias)),
+        ):
+            by_place[place.name] = candidate
+    return sorted(
+        by_place.values(),
+        key=_place_rank_key,
+        reverse=True,
+    )
+
+
+def _place_rank_key(candidate: PlaceMatch) -> tuple[float, float, float]:
+    if candidate.score >= 0.98:
+        return 1.0, float(len(_compact(candidate.alias))), candidate.score
+    return 0.0, candidate.score, float(len(_compact(candidate.alias)))
+
+
+def match_place(
+    text: str,
+    places: list[Place],
+    *,
+    contextual: bool = False,
+) -> PlaceMatch | None:
     normalized = normalize_text(text)
     if not normalized or not places:
         return None
-    strong = [
-        (place, _strong_alias_score(normalized, place.alias))
-        for place in places
-    ]
-    strong = [(place, score) for place, score in strong if score]
-    if strong:
-        place, score = max(
-            strong,
-            key=lambda candidate: (
-                len(_compact(candidate[0].alias)),
-                candidate[1],
-            ),
-        )
-        return PlaceMatch(place.name, score, place.alias)
+    ranked = _rank_place_matches(normalized, places)
+    if not ranked:
+        return None
+    best = ranked[0]
+    runner_up_score = ranked[1].score if len(ranked) > 1 else 0.0
 
-    best: PlaceMatch | None = None
-    for place in places:
-        if len(place.alias) < 5:
-            continue
-        score = _fuzzy_alias_score(normalized, place.alias)
-        threshold = 0.88 if len(place.alias) < 8 else 0.84
-        if score >= threshold and (
-            best is None
-            or (score, len(_compact(place.alias)))
-            > (best.score, len(_compact(best.alias)))
-        ):
-            best = PlaceMatch(place.name, score, place.alias)
-    return best
+    if best.score >= 0.98:
+        return PlaceMatch(
+            best.name,
+            best.score,
+            best.alias,
+            runner_up_score=runner_up_score,
+        )
+
+    strict_threshold = 0.88 if len(best.alias) < 8 else 0.84
+    if best.score >= strict_threshold:
+        return PlaceMatch(
+            best.name,
+            best.score,
+            best.alias,
+            runner_up_score=runner_up_score,
+        )
+
+    contextual_threshold = 0.80 if len(best.alias) < 8 else 0.78
+    minimum_margin = 0.06 if best.score >= 0.82 else 0.08
+    if (
+        contextual
+        and best.score >= contextual_threshold
+        and best.score - runner_up_score >= minimum_margin
+    ):
+        return PlaceMatch(
+            best.name,
+            best.score,
+            best.alias,
+            contextual=True,
+            runner_up_score=runner_up_score,
+        )
+    return None
