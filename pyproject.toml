@@ -22,6 +22,7 @@ dev = ["pytest>=9,<10"]
 [project.scripts]
 hospital-ocr = "hospital_ocr.cli:main"
 hospital-ocr-web = "hospital_ocr.web_launcher:main"
+hospital-ocr-evaluate = "hospital_ocr.evaluation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

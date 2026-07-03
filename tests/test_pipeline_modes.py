@@ -112,6 +112,30 @@ def test_handwritten_grid_mode_compares_global_and_refined_cells(
     assert audit["origen_limites"] == "cuadrícula"
 
 
+def test_auto_grid_mode_compares_global_and_refined_cells(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "grid.png"
+    Image.new("RGB", (400, 200), "white").save(image_path)
+    engine = FakeOcrEngine()
+
+    lines, audit = _recognize_image(
+        engine,
+        image_path,
+        _grid(),
+        "auto",
+        tmp_path / "rows",
+    )
+
+    assert engine.global_calls == 1
+    assert engine.row_calls == 1
+    assert len(lines) == 5
+    assert lines[0].text == "OCR global"
+    assert audit is not None
+    assert audit["modo"] == "auto"
+    assert audit["origen_limites"] == "cuadrícula"
+
+
 def test_printed_mode_uses_only_global_ocr(tmp_path: Path) -> None:
     image_path = tmp_path / "printed.png"
     Image.new("RGB", (400, 200), "white").save(image_path)

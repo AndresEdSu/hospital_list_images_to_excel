@@ -176,6 +176,49 @@ def _grid_row_coverage(
     return len(covered_rows) / max(1, len(grid.horizontal) - 1)
 
 
+def _recognize_grid_image(
+    engine: PaddleOcrEngine,
+    image_path: Path,
+    grid: TableGrid,
+    mode: OcrMode,
+    rows_dir: Path,
+    initial_lines: list[OcrLine] | None = None,
+) -> tuple[list[OcrLine], dict[str, Any]]:
+    rows = rows_from_grid(image_path, grid)
+    global_lines = (
+        initial_lines
+        if initial_lines is not None
+        else engine.recognize(image_path)
+    )
+    if not rows:
+        return global_lines, _row_audit(
+            mode=mode,
+            rows=[],
+            lines=global_lines,
+            coverage_before=None,
+            boundary_source="cuadrícula",
+            fallback_reason=(
+                "No se pudieron delimitar recortes; se usó OCR global."
+            ),
+            grid=grid,
+        )
+
+    refined_lines = engine.recognize_grid_cells(
+        image_path,
+        cells_from_grid(grid),
+        rows_dir,
+    )
+    lines = merge_grid_ocr(global_lines, refined_lines, grid)
+    return lines, _row_audit(
+        mode=mode,
+        rows=rows,
+        lines=lines,
+        coverage_before=_grid_row_coverage(global_lines, grid),
+        boundary_source="cuadrícula",
+        grid=grid,
+    )
+
+
 def _recognize_image(
     engine: PaddleOcrEngine,
     image_path: Path,
@@ -187,12 +230,17 @@ def _recognize_image(
         return engine.recognize(image_path), None
 
     if mode == "handwritten":
-        rows = (
-            rows_from_grid(image_path, grid)
-            if grid is not None
-            else detect_text_rows(image_path)
-        )
-        boundary_source = "cuadrícula" if grid is not None else "renglones"
+        if grid is not None:
+            return _recognize_grid_image(
+                engine,
+                image_path,
+                grid,
+                mode,
+                rows_dir,
+            )
+
+        rows = detect_text_rows(image_path)
+        boundary_source = "renglones"
         if not rows:
             lines = engine.recognize(image_path)
             return lines, _row_audit(
@@ -206,39 +254,35 @@ def _recognize_image(
                 ),
                 grid=grid,
             )
-        if grid is not None:
-            initial_lines = engine.recognize(image_path)
-            refined_lines = engine.recognize_grid_cells(
-                image_path,
-                cells_from_grid(grid),
-                rows_dir,
-            )
-            lines = merge_grid_ocr(initial_lines, refined_lines, grid)
-            coverage_before = _grid_row_coverage(initial_lines, grid)
-        else:
-            segmented_lines = engine.recognize_rows(
-                image_path,
-                rows,
-                rows_dir,
-            )
-            lines = merge_row_ocr(
-                [],
-                segmented_lines,
-                rows,
-            )
-            coverage_before = None
+        segmented_lines = engine.recognize_rows(
+            image_path,
+            rows,
+            rows_dir,
+        )
+        lines = merge_row_ocr(
+            [],
+            segmented_lines,
+            rows,
+        )
         return lines, _row_audit(
             mode=mode,
             rows=rows,
             lines=lines,
-            coverage_before=coverage_before,
+            coverage_before=None,
             boundary_source=boundary_source,
             grid=grid,
         )
 
     initial_lines = engine.recognize(image_path)
     if grid is not None:
-        return initial_lines, None
+        return _recognize_grid_image(
+            engine,
+            image_path,
+            grid,
+            mode,
+            rows_dir,
+            initial_lines,
+        )
     rows = detect_text_rows(image_path)
     if not needs_row_ocr(initial_lines, rows):
         return initial_lines, None

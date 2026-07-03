@@ -5,6 +5,8 @@ Pipeline local para transformar imágenes de listas hospitalarias en archivos Ex
 ## Estructura
 
 - `src/hospital_ocr/`: código fuente del pipeline OCR.
+- `src/hospital_ocr/table_extraction/`: detección de tablas, esquemas,
+  agrupación de filas, extracción de campos y ensamblaje de registros.
 - `tests/`: pruebas automatizadas.
 - `config/centros.csv`: relación entre carpetas y nombres oficiales de centros.
 - `config/lugares.csv`: equivalencias configurables de ciudades, sectores y localidades.
@@ -12,6 +14,7 @@ Pipeline local para transformar imágenes de listas hospitalarias en archivos Ex
 - `config/nombres_comunes.csv`: catálogo configurable de nombres frecuentes.
 - `config/apellidos_comunes.csv`: catálogo configurable de apellidos frecuentes.
 - `data/input/images/`: imágenes originales, clasificadas en una subcarpeta por centro; su contenido no se guarda en Git.
+- `data/evaluation/`: corpus privado de imágenes reales y resultados esperados para medir precisión; su contenido no se guarda en Git.
 - `data/interim/`: imágenes preprocesadas, resultados OCR y cuadrículas detectadas para auditoría.
 - `data/output/`: archivos Excel finales.
 
@@ -59,6 +62,28 @@ no se agrega automáticamente a `config/centros.csv`, para evitar duplicados y
 errores ortográficos en la lista compartida.
 
 Los archivos temporales se guardan en `data/interim/web_sessions/`. Pueden eliminarse desde la interfaz y las sesiones con más de 24 horas se limpian automáticamente.
+
+### Evaluación con imágenes reales
+
+El corpus privado se guarda en `data/evaluation/test_images/`. Cada imagen debe
+tener un CSV homónimo, codificado como UTF-8 y separado por punto y coma. Para
+validar únicamente su estructura:
+
+```powershell
+python -m hospital_ocr.evaluation data/evaluation/test_images --validate-only
+```
+
+Para ejecutar una línea base completa con el modo automático:
+
+```powershell
+python -m hospital_ocr.evaluation data/evaluation/test_images --ocr-mode auto
+```
+
+Los resultados se escriben en `data/evaluation/test_images/results/`: resumen
+JSON, métricas por imagen y campo, diferencias, predicciones y artefactos OCR.
+Este contenido puede incluir datos sensibles y permanece excluido de Git.
+Las métricas pueden recalcularse posteriormente sin repetir el OCR mediante
+`--from-predictions`.
 
 ### Línea de comandos
 

@@ -16,6 +16,7 @@ dist/
 # Datos sensibles y resultados generados
 data/input/images/*
 !data/input/images/.gitkeep
+data/evaluation/*
 data/interim/*
 !data/interim/.gitkeep
 data/output/*
