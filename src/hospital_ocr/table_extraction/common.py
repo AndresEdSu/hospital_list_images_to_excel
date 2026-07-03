@@ -18,6 +18,13 @@ TIME_RE = re.compile(
     re.IGNORECASE,
 )
 DATE_RE = re.compile(r"\b\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{2,4}\b")
+SEMANTIC_AGE_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?P<number>[0-9OQILBSGZEU]{1,3})\s*"
+    r"(?P<unit>años?|anos?|a|e|mes(?:es)?|d[ií]as?)"
+    r"(?=$|[^A-Za-z]|[MFH](?:\W|$))",
+    re.IGNORECASE,
+)
 HEADER_WORDS = {
     "nombre",
     "apellido",
@@ -108,10 +115,49 @@ def text_height(line: OcrLine) -> int:
     return max(1, line.box[3] - line.box[1])
 
 
+def semantic_age_tokens(
+    text: str,
+) -> list[tuple[tuple[int, int], int, str]]:
+    tokens: list[tuple[tuple[int, int], int, str]] = []
+    translation = str.maketrans(
+        {
+            "O": "0",
+            "Q": "0",
+            "I": "1",
+            "L": "1",
+            "B": "3",
+            "S": "5",
+            "G": "6",
+            "Z": "2",
+            "E": "2",
+            "U": "4",
+        }
+    )
+    for match in SEMANTIC_AGE_RE.finditer(text):
+        if normalize_text(match.group()) in {"la", "le", "se"}:
+            continue
+        compact = match.group("number").upper().translate(translation)
+        if not compact.isdigit():
+            continue
+        age = int(compact)
+        if 0 <= age <= 115:
+            tokens.append((match.span(), age, match.group("unit")))
+    return tokens
+
+
+def remove_semantic_age_tokens(text: str) -> str:
+    characters = list(text)
+    for (start, end), _, _ in semantic_age_tokens(text):
+        for index in range(start, end):
+            characters[index] = " "
+    return "".join(characters)
+
+
 def name_from_text(text: str) -> str:
     cleaned = DATE_RE.sub(" ", text)
     cleaned = TIME_RE.sub(" ", cleaned)
     cleaned = DOCUMENT_RE.sub(" ", cleaned)
+    cleaned = remove_semantic_age_tokens(cleaned)
     cleaned = re.sub(r"^\s*\d{1,3}\s*[.):\-]?\s*", " ", cleaned)
     cleaned = re.sub(r"\b(?:a|p)\s*\.?\s*m\.?\b", " ", cleaned, flags=re.I)
     words = [

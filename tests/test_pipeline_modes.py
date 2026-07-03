@@ -2,9 +2,18 @@ from pathlib import Path
 
 from PIL import Image
 
-from hospital_ocr.handwriting import GridCell, TextRow, rows_from_grid
+from hospital_ocr.handwriting import (
+    GridCell,
+    TextRow,
+    cells_from_grid,
+    rows_from_grid,
+)
 from hospital_ocr.models import GridBoundary, OcrLine, TableGrid
-from hospital_ocr.pipeline import _image_progress, _recognize_image
+from hospital_ocr.pipeline import (
+    _image_progress,
+    _recognize_image,
+    _select_grid_cells_for_refinement,
+)
 
 
 class FakeOcrEngine:
@@ -153,6 +162,96 @@ def test_printed_mode_uses_only_global_ocr(tmp_path: Path) -> None:
     assert engine.global_calls == 1
     assert engine.row_calls == 0
     assert audit is None
+
+
+def test_grid_refinement_policy_is_more_sensitive_for_handwriting() -> None:
+    grid = _grid()
+    cells = [
+        cell
+        for cell in cells_from_grid(grid)
+        if cell.row_index == 1
+    ]
+    lines = [
+        OcrLine("Paciente", 0.93, (30, 115, 150, 135), 400, 200),
+        OcrLine("Referencia", 0.93, (220, 115, 330, 135), 400, 200),
+    ]
+
+    automatic = _select_grid_cells_for_refinement(
+        cells,
+        lines,
+        grid,
+        "auto",
+    )
+    handwritten = _select_grid_cells_for_refinement(
+        cells,
+        lines,
+        grid,
+        "handwritten",
+    )
+
+    assert automatic == []
+    assert handwritten == cells
+
+
+def test_auto_grid_refines_structured_fields_despite_high_confidence() -> None:
+    grid = _grid()
+    cells = [
+        cell
+        for cell in cells_from_grid(grid)
+        if cell.row_index == 1
+    ]
+    lines = [
+        OcrLine("Paciente", 0.99, (30, 115, 150, 135), 400, 200),
+        OcrLine("87654321", 0.99, (220, 115, 330, 135), 400, 200),
+    ]
+
+    selected = _select_grid_cells_for_refinement(
+        cells,
+        lines,
+        grid,
+        "auto",
+    )
+
+    assert selected == [cells[1]]
+
+
+def test_auto_grid_refines_complete_repeated_sex_column() -> None:
+    grid = TableGrid(
+        horizontal=(
+            GridBoundary(0, 0, 1),
+            GridBoundary(0, 50, 1),
+            GridBoundary(0, 100, 1),
+            GridBoundary(0, 150, 1),
+        ),
+        vertical=(
+            GridBoundary(0, 0, 1),
+            GridBoundary(0, 200, 1),
+            GridBoundary(0, 400, 1),
+        ),
+        confidence=1,
+    )
+    cells = cells_from_grid(grid)
+    lines = [
+        OcrLine("Nombre", 0.99, (20, 15, 160, 35), 400, 150),
+        OcrLine("F", 0.99, (250, 15, 280, 35), 400, 150),
+        OcrLine("Paciente", 0.99, (20, 65, 160, 85), 400, 150),
+        OcrLine("M", 0.99, (250, 65, 280, 85), 400, 150),
+        OcrLine("Persona", 0.99, (20, 115, 160, 135), 400, 150),
+        OcrLine("X", 0.99, (250, 115, 280, 135), 400, 150),
+    ]
+
+    selected = _select_grid_cells_for_refinement(
+        cells,
+        lines,
+        grid,
+        "auto",
+    )
+
+    assert next(
+        cell
+        for cell in cells
+        if cell.row_index == 2 and cell.column_index == 1
+    ) in selected
 
 
 def test_image_progress_advances_through_each_processing_stage() -> None:

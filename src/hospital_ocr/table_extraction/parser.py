@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from statistics import median
+
 from hospital_ocr.matching import detect_specialty, match_place
 from hospital_ocr.models import (
     OcrLine,
@@ -19,6 +21,7 @@ from hospital_ocr.table_extraction.fields import (
     extract_schema_age as _extract_schema_age,
     extract_schema_sex as _extract_schema_sex,
     extract_semantic_age as _extract_semantic_age,
+    extract_semantic_sex as _extract_semantic_sex,
     headerless_field_lines as _headerless_field_lines,
     joined_cell_text as _joined_cell_text,
     schema_lines as _schema_lines,
@@ -32,6 +35,10 @@ from hospital_ocr.table_extraction.rows import (
     header_cutoff as _header_cutoff,
     row_groups as _row_groups,
     row_index_lines as _row_index_lines,
+)
+from hospital_ocr.table_extraction.sections import (
+    find_section_headings as _find_section_headings,
+    section_for_line as _section_for_line,
 )
 from hospital_ocr.table_extraction.schema import infer_schema as _infer_schema
 
@@ -67,12 +74,25 @@ def parse_table_lines(
             if schema
             else lines
         )
-    anchors = _find_row_anchors(data_lines, schema, grid, places)
+    section_headings = (
+        _find_section_headings(data_lines, specialties, grid)
+        if schema is None
+        else []
+    )
+    section_line_ids = {
+        line_id
+        for heading in section_headings
+        for line_id in heading.line_ids
+    }
+    record_lines = [
+        line for line in data_lines if id(line) not in section_line_ids
+    ]
+    anchors = _find_row_anchors(record_lines, schema, grid, places)
     if len(anchors) < 2:
         return []
 
     headerless_index_ids = (
-        _infer_headerless_index_ids(data_lines) if schema is None else set()
+        _infer_headerless_index_ids(record_lines) if schema is None else set()
     )
     header_cutoff = (
         None
@@ -89,8 +109,39 @@ def parse_table_lines(
             if detected := detect_specialty(line.text, specialties):
                 page_specialty = detected
                 break
+    groups = _row_groups(record_lines, anchors, grid)
+    anchor_gaps = [
+        current.line.center_y - previous.line.center_y
+        for previous, current in zip(anchors, anchors[1:], strict=False)
+        if current.line.center_y > previous.line.center_y
+    ]
+    section_gap_limit = (
+        max(
+            median(anchor_gaps) * 2.2,
+            anchors[0].line.image_height * 0.035,
+        )
+        if anchor_gaps
+        else float("inf")
+    )
     records: list[PatientRecord] = []
-    for anchor, row_lines in _row_groups(data_lines, anchors, grid):
+    previous_anchor = None
+    active_section = None
+    last_section_candidate = None
+    for anchor, row_lines in groups:
+        section_candidate = _section_for_line(anchor.line, section_headings)
+        if section_candidate is not last_section_candidate:
+            active_section = section_candidate
+            last_section_candidate = section_candidate
+        if (
+            active_section is not None
+            and previous_anchor is not None
+            and anchor.line.center_y - previous_anchor.line.center_y
+            > section_gap_limit
+            and active_section.line.center_y <= previous_anchor.line.center_y
+        ):
+            active_section = None
+        section = active_section
+        previous_anchor = anchor
         if header_cutoff is not None and anchor.line.center_y > header_cutoff:
             row_lines = [
                 line for line in row_lines if line.center_y > header_cutoff
@@ -131,10 +182,11 @@ def parse_table_lines(
             )
         else:
             field_lines = _headerless_field_lines(row_lines, anchor, grid)
-            document_lines = [anchor.line, *field_lines]
-            document_id = _extract_document(document_lines)
-            age, age_unit = _extract_semantic_age(field_lines)
-            sex_result = _extract_schema_sex(field_lines)
+            semantic_lines = [anchor.line, *field_lines]
+            document_lines = semantic_lines
+            document_id = _extract_document(semantic_lines)
+            age, age_unit = _extract_semantic_age(semantic_lines)
+            sex_result = _extract_semantic_sex(semantic_lines)
             sex = sex_result.value
             semantic_text = _joined_cell_text(field_lines)
             origin_text = semantic_text
@@ -158,11 +210,25 @@ def parse_table_lines(
             if has_explicit_origin
             else ""
         )
-        detected_specialty = (
+        row_specialty = next(
+            (
+                detected
+                for line in specialty_lines
+                if (detected := detect_specialty(line.text, specialties))
+                is not None
+            ),
+            None,
+        ) or (
             detect_specialty(specialty_text, specialties)
             if specialty_text
+            else None
+        )
+        contextual_specialty = (
+            (section.specialty, section.area)
+            if section is not None
             else page_specialty
         )
+        detected_specialty = row_specialty or contextual_specialty
         specialty = detected_specialty[0] if detected_specialty else ""
         area = detected_specialty[1] if detected_specialty else ""
         name_split = split_full_name(anchor.name, name_lexicons)
@@ -333,7 +399,9 @@ def parse_table_lines(
                     else ""
                 ),
                 "especialidad": (
-                    "catálogo de especialidades en celda sin encabezado"
+                    "catálogo y encabezado de sección"
+                    if specialty and section is not None
+                    else "catálogo de especialidades en celda sin encabezado"
                     if specialty
                     else ""
                 ),

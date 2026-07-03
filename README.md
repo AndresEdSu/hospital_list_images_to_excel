@@ -150,13 +150,20 @@ Los recortes y el resumen de cobertura se guardan en
 `data/interim/handwriting_rows/` para auditoría.
 
 La interfaz permite seleccionar `Automático`, `Manuscrito` o `Impreso`.
-En listas sin cuadrícula, `Manuscrito` procesa directamente todos los
-renglones reforzados. Cuando existe una cuadrícula, rectifica sus celdas con
-perspectiva, conserva su fila y columna de origen y compara esos resultados con
-el OCR global para no degradar celdas que ya se leyeron correctamente.
-`Impreso` desactiva por completo el pase reforzado. En la línea de comandos se
-ofrecen los mismos modos mediante
+`Automático` refuerza celdas o renglones ausentes, estructurados o de baja
+confianza. `Manuscrito` usa la misma estrategia con un umbral más sensible.
+Cuando la selección cubriría casi toda una cuadrícula, se procesa completa para
+no degradar caracteres aislados al cambiar la composición de las filas.
+`Impreso` conserva una sola pasada global. En la línea de comandos se ofrecen
+los mismos modos mediante
 `--ocr-mode auto|handwritten|printed`.
+
+Los resultados OCR se guardan en una caché local versionada por el contenido
+de la imagen y el modo seleccionado. Repetir una imagen sin cambios evita
+cargar el modelo y ejecutar nuevamente el OCR. Los tiempos de
+preprocesamiento, detección, OCR e interpretación se registran en
+`data/interim/tiempos.json`. Tanto la caché como ese diagnóstico permanecen
+fuera de Git porque pueden derivarse de documentos sensibles.
 
 `Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
 

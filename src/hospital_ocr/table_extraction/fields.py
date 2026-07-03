@@ -11,6 +11,8 @@ from hospital_ocr.table_extraction.common import (
     is_header_or_metadata,
     name_from_text,
     ocr_number,
+    remove_semantic_age_tokens,
+    semantic_age_tokens,
 )
 from hospital_ocr.table_extraction.types import (
     RowAnchor,
@@ -189,6 +191,18 @@ def extract_semantic_age(
     for line in lines:
         if DATE_RE.search(line.text) or TIME_RE.search(line.text):
             continue
+        for _, age, raw_unit in semantic_age_tokens(
+            DOCUMENT_RE.sub(" ", line.text)
+        ):
+            unit = normalize_text(raw_unit)
+            normalized_unit = (
+                "meses"
+                if unit.startswith("mes")
+                else "días"
+                if unit.startswith("dia")
+                else "años"
+            )
+            candidates.append((2, line.score, age, normalized_unit))
         normalized = normalize_text(DOCUMENT_RE.sub(" ", line.text))
         match = re.fullmatch(
             r"(?:edad\s*)?(?P<age>\d{1,3})\s*"
@@ -220,6 +234,40 @@ def extract_semantic_age(
         return None, ""
     _, _, age, unit = candidates[0]
     return age, unit
+
+
+def extract_semantic_sex(lines: list[OcrLine]) -> SexResult:
+    candidates: dict[str, list[tuple[str, float]]] = {}
+    for line in lines:
+        text = remove_semantic_age_tokens(line.text)
+        for match in re.finditer(
+            r"(?<![A-Za-z])(?P<marker>[MFH])(?![A-Za-z])",
+            text,
+            re.IGNORECASE,
+        ):
+            marker = match.group("marker").upper()
+            value = "M" if marker == "H" else marker
+            candidates.setdefault(value, []).append((marker, line.score))
+    if len(candidates) > 1:
+        markers = tuple(
+            sorted(
+                {
+                    marker
+                    for values in candidates.values()
+                    for marker, _ in values
+                }
+            )
+        )
+        return SexResult("", markers, conflict=True)
+    if not candidates:
+        return SexResult("")
+    value, values = next(iter(candidates.items()))
+    normalized_from = (
+        ("H",)
+        if value == "M" and all(marker == "H" for marker, _ in values)
+        else ()
+    )
+    return SexResult(value, normalized_from)
 
 
 def joined_cell_text(lines: list[OcrLine]) -> str:

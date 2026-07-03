@@ -49,9 +49,11 @@ def _compact(value: str) -> str:
 
 
 def _strong_alias_score(text: str, alias: str) -> float:
+    compact_alias = _compact(alias)
+    if compact_alias == "mi":
+        return 1.0 if _compact(text) == compact_alias else 0.0
     if re.search(rf"(?:^|\s){re.escape(alias)}(?:$|\s)", text):
         return 1.0
-    compact_alias = _compact(alias)
     if len(compact_alias) < 5:
         return 0.0
     if any(_compact(window) == compact_alias for window in _alias_windows(text, alias)):
