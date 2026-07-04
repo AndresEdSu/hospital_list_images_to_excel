@@ -9,11 +9,11 @@ from hospital_ocr.handwriting import (
     rows_from_grid,
 )
 from hospital_ocr.models import GridBoundary, OcrLine, TableGrid
-from hospital_ocr.pipeline import (
-    _image_progress,
-    _recognize_image,
-    _select_grid_cells_for_refinement,
+from hospital_ocr.ocr_refinement import (
+    select_grid_cells_for_refinement,
 )
+from hospital_ocr.processing_metrics import image_progress
+from hospital_ocr.recognition import recognize_image
 
 
 class FakeOcrEngine:
@@ -105,7 +105,7 @@ def test_handwritten_grid_mode_compares_global_and_refined_cells(
     Image.new("RGB", (400, 200), "white").save(image_path)
     engine = FakeOcrEngine()
 
-    lines, audit = _recognize_image(
+    lines, audit = recognize_image(
         engine,
         image_path,
         _grid(),
@@ -128,7 +128,7 @@ def test_auto_grid_mode_compares_global_and_refined_cells(
     Image.new("RGB", (400, 200), "white").save(image_path)
     engine = FakeOcrEngine()
 
-    lines, audit = _recognize_image(
+    lines, audit = recognize_image(
         engine,
         image_path,
         _grid(),
@@ -150,7 +150,7 @@ def test_printed_mode_uses_only_global_ocr(tmp_path: Path) -> None:
     Image.new("RGB", (400, 200), "white").save(image_path)
     engine = FakeOcrEngine()
 
-    lines, audit = _recognize_image(
+    lines, audit = recognize_image(
         engine,
         image_path,
         _grid(),
@@ -176,13 +176,13 @@ def test_grid_refinement_policy_is_more_sensitive_for_handwriting() -> None:
         OcrLine("Referencia", 0.93, (220, 115, 330, 135), 400, 200),
     ]
 
-    automatic = _select_grid_cells_for_refinement(
+    automatic = select_grid_cells_for_refinement(
         cells,
         lines,
         grid,
         "auto",
     )
-    handwritten = _select_grid_cells_for_refinement(
+    handwritten = select_grid_cells_for_refinement(
         cells,
         lines,
         grid,
@@ -205,7 +205,7 @@ def test_auto_grid_refines_structured_fields_despite_high_confidence() -> None:
         OcrLine("87654321", 0.99, (220, 115, 330, 135), 400, 200),
     ]
 
-    selected = _select_grid_cells_for_refinement(
+    selected = select_grid_cells_for_refinement(
         cells,
         lines,
         grid,
@@ -240,7 +240,7 @@ def test_auto_grid_refines_complete_repeated_sex_column() -> None:
         OcrLine("X", 0.99, (250, 115, 280, 135), 400, 150),
     ]
 
-    selected = _select_grid_cells_for_refinement(
+    selected = select_grid_cells_for_refinement(
         cells,
         lines,
         grid,
@@ -256,11 +256,11 @@ def test_auto_grid_refines_complete_repeated_sex_column() -> None:
 
 def test_image_progress_advances_through_each_processing_stage() -> None:
     values = [
-        _image_progress(0, 2, fraction)
+        image_progress(0, 2, fraction)
         for fraction in (0.0, 0.14, 0.26, 0.78, 0.96, 1.0)
     ]
     values.extend(
-        _image_progress(1, 2, fraction)
+        image_progress(1, 2, fraction)
         for fraction in (0.0, 0.14, 0.26, 0.78, 0.96, 1.0)
     )
 

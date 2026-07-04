@@ -61,11 +61,11 @@ def test_second_pipeline_run_uses_cached_ocr_without_loading_engine(
             ]
 
     monkeypatch.setattr(
-        "hospital_ocr.pipeline.PaddleOcrEngine",
+        "hospital_ocr.image_processor.PaddleOcrEngine",
         FakeEngine,
     )
     monkeypatch.setattr(
-        "hospital_ocr.pipeline.detect_table_grid",
+        "hospital_ocr.image_processor.detect_table_grid",
         lambda image, debug: None,
     )
 

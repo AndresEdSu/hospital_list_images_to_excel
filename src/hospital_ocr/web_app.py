@@ -8,7 +8,8 @@ import streamlit as st
 from hospital_ocr.catalogs import load_centers, write_center_catalog
 from hospital_ocr.editing import apply_patient_edits
 from hospital_ocr.exporting import export_results, patient_records_dataframe
-from hospital_ocr.pipeline import OcrMode, PipelineConfig, process_images
+from hospital_ocr.pipeline import PipelineConfig, process_images
+from hospital_ocr.pipeline_types import OcrMode
 from hospital_ocr.web_service import (
     cleanup_old_sessions,
     create_session,

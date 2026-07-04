@@ -15,8 +15,9 @@ from hospital_ocr.models import PatientRecord
 from hospital_ocr.name_splitter import load_name_lexicons
 from hospital_ocr.ocr_engine import PaddleOcrEngine, save_raw_ocr
 from hospital_ocr.parsing import parse_ocr_lines
-from hospital_ocr.pipeline import OCR_MODES, OcrMode, _recognize_image
+from hospital_ocr.pipeline_types import OCR_MODES, OcrMode
 from hospital_ocr.preprocessing import preprocess_image
+from hospital_ocr.recognition import recognize_image
 from hospital_ocr.text import normalize_text
 
 
@@ -676,7 +677,7 @@ def evaluate_dataset(
         grid_path = interim / "grids" / f"{case.stem}.jpg"
         grid = detect_table_grid(processed_path, grid_path)
         print(f"[{index}/{len(cases)}] {case.stem}: OCR {ocr_mode}", flush=True)
-        lines, audit = _recognize_image(
+        lines, audit = recognize_image(
             engine,
             processed_path,
             grid,
