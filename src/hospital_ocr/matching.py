@@ -9,6 +9,9 @@ from hospital_ocr.text import normalize_text
 
 
 FLOOR_RE = re.compile(r"\bpiso\s*(\d+)\b", re.IGNORECASE)
+PLACE_SEPARATOR_RE = re.compile(
+    r"(?<!\d)\s*[,;]\s*|\s*[,;]\s*(?!\s*\d)|\s+[-\u2013\u2014/]\s+"
+)
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,40 @@ def _place_rank_key(candidate: PlaceMatch) -> tuple[float, float, float]:
     return 0.0, candidate.score, float(len(_compact(candidate.alias)))
 
 
+def _strong_alias_span(text: str, alias: str) -> tuple[int, int] | None:
+    match = re.search(rf"(?:^|\s)({re.escape(alias)})(?:$|\s)", text)
+    return match.span(1) if match else None
+
+
+def _overlapping(
+    left: tuple[int, int],
+    right: tuple[int, int],
+) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _independent_strong_place_matches(
+    normalized_text: str,
+    places: list[Place],
+) -> list[PlaceMatch]:
+    selected: list[tuple[tuple[int, int], PlaceMatch]] = []
+    for candidate in _rank_place_matches(normalized_text, places):
+        if candidate.score < 0.98:
+            continue
+        span = _strong_alias_span(normalized_text, candidate.alias)
+        if span is None:
+            continue
+        if any(_overlapping(span, existing_span) for existing_span, _ in selected):
+            continue
+        selected.append((span, candidate))
+    if len(selected) < 2:
+        return []
+    return [
+        candidate
+        for _, candidate in sorted(selected, key=lambda item: item[0][0])
+    ]
+
+
 def match_place(
     text: str,
     places: list[Place],
@@ -217,3 +254,38 @@ def match_place(
             runner_up_score=runner_up_score,
         )
     return None
+
+
+def match_places(
+    text: str,
+    places: list[Place],
+    *,
+    contextual: bool = False,
+) -> list[PlaceMatch]:
+    segments = [
+        segment.strip()
+        for segment in PLACE_SEPARATOR_RE.split(text)
+        if segment.strip()
+    ]
+    matches: list[PlaceMatch] = []
+    if len(segments) >= 2:
+        for segment in segments:
+            match = match_place(
+                segment,
+                places,
+                contextual=contextual,
+            )
+            if match and match.name not in {
+                candidate.name for candidate in matches
+            }:
+                matches.append(match)
+        if len(matches) >= 2:
+            return matches
+
+    normalized = normalize_text(text)
+    strong_matches = _independent_strong_place_matches(normalized, places)
+    if strong_matches:
+        return strong_matches
+
+    match = match_place(text, places, contextual=contextual)
+    return [match] if match else []

@@ -11,7 +11,7 @@ NAME_WORD_RE = re.compile(
     r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}"
 )
 DOCUMENT_RE = re.compile(
-    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.\-·]?\d){5,10}(?!\d)"
+    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.,\-·]?\d){5,10}(?!\d)"
 )
 TIME_RE = re.compile(
     r"\b\d{1,2}\s*[:.]\s*\d{2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?",

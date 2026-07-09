@@ -89,6 +89,39 @@ def test_table_parser_uses_headers_when_columns_are_reordered() -> None:
     assert records[1].specialty == "Traumatología"
 
 
+def test_table_parser_extracts_comma_documents_and_multiple_origins() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Nombre y Apellido", 20, 100, 300),
+            table_line("C.I.", 20, 360, 470),
+            table_line("Edad", 20, 520, 600),
+            table_line("Procedencia", 20, 680, 920),
+            table_line("Maria Perez", 100, 110, 290),
+            table_line("10,711,859", 100, 365, 465),
+            table_line("60 ANOS", 100, 525, 595),
+            table_line("Caribe - La Guaira", 100, 690, 910),
+            table_line("Luis Gomez", 145, 110, 280),
+            table_line("15,507,716", 145, 365, 465),
+            table_line("47 ANOS", 145, 525, 595),
+            table_line("La Guaira", 145, 690, 820),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "tabla_procedencias_multiples.jpg",
+        [
+            Place("caribe", "Caribe"),
+            Place("la guaira", "La Guaira"),
+        ],
+    )
+
+    assert len(records) == 2
+    assert records[0].document_id == "10711859"
+    assert records[0].origin == "Caribe - La Guaira"
+    assert records[1].document_id == "15507716"
+    assert records[1].origin == "La Guaira"
+
+
 def test_ignored_bed_column_limits_origin_without_exporting_bed_values() -> None:
     records = parse_ocr_lines(
         [

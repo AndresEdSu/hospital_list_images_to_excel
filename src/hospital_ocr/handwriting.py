@@ -12,7 +12,7 @@ from hospital_ocr.models import GridBoundary, OcrLine, TableGrid
 
 
 GRID_DOCUMENT_RE = re.compile(
-    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.\-Â·]?\d){5,10}(?!\d)"
+    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.,\-Â·]?\d){5,10}(?!\d)"
 )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from statistics import median
 
-from hospital_ocr.matching import detect_specialty, match_place
+from hospital_ocr.matching import detect_specialty, match_places
 from hospital_ocr.models import (
     OcrLine,
     PatientRecord,
@@ -198,14 +198,14 @@ def parse_table_lines(
             specialty_lines = field_lines
 
         has_explicit_origin = bool(schema and "origin" in schema.columns)
-        place = match_place(
+        place_matches = match_places(
             origin_text,
             places,
             contextual=has_explicit_origin,
         )
         origin = (
-            place.name
-            if place
+            " - ".join(match.name for match in place_matches)
+            if place_matches
             else origin_text
             if has_explicit_origin
             else ""
@@ -251,9 +251,9 @@ def parse_table_lines(
             )
         if not origin:
             notes.append("Procedencia no reconocida")
-        elif has_explicit_origin and places and place is None:
+        elif has_explicit_origin and places and not place_matches:
             notes.append("Procedencia no validada en catálogo")
-        elif place and place.contextual:
+        elif any(match.contextual for match in place_matches):
             notes.append(
                 "Procedencia normalizada por coincidencia contextual"
             )
@@ -294,7 +294,11 @@ def parse_table_lines(
                 min(
                     1.0,
                     _average_score(origin_lines)
-                    * (place.score if place else 0.65),
+                    * (
+                        min(match.score for match in place_matches)
+                        if place_matches
+                        else 0.65
+                    ),
                 )
                 if origin
                 else 0.0
@@ -341,13 +345,13 @@ def parse_table_lines(
                 ),
                 "procedencia": (
                     "cuadrícula, encabezado y catálogo geográfico contextual"
-                    if grid and place and place.contextual
+                    if grid and any(match.contextual for match in place_matches)
                     else "encabezado y catálogo geográfico contextual"
-                    if place and place.contextual
+                    if any(match.contextual for match in place_matches)
                     else "cuadrícula, encabezado y catálogo geográfico"
-                    if grid and place
+                    if grid and place_matches
                     else "encabezado y catálogo geográfico"
-                    if place
+                    if place_matches
                     else "columna inferida por encabezado"
                     if origin
                     else ""
@@ -365,7 +369,9 @@ def parse_table_lines(
             document_confidence = confidence * 0.85 if document_id else 0.0
             age_confidence = confidence * 0.65 if age is not None else 0.0
             origin_confidence = (
-                confidence * place.score if origin and place else 0.0
+                confidence * min(match.score for match in place_matches)
+                if origin and place_matches
+                else 0.0
             )
             specialty_confidence = confidence * 0.75 if specialty else 0.0
             evidence = {
@@ -393,9 +399,9 @@ def parse_table_lines(
                 ),
                 "procedencia": (
                     "catálogo geográfico en celda física sin encabezado"
-                    if grid and place
+                    if grid and place_matches
                     else "catálogo geográfico en celda sin encabezado"
-                    if place
+                    if place_matches
                     else ""
                 ),
                 "especialidad": (

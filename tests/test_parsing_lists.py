@@ -39,6 +39,27 @@ def test_free_list_extracts_document_and_fuzzy_place() -> None:
     assert records[0].origin_confidence > 0.8
 
 
+def test_free_list_extracts_comma_document_and_multiple_origins() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatria", 20),
+            line("Maria Perez 10,711,859 60 anos F Caribe - La Guaira", 100),
+        ],
+        [Specialty("pediatria", "Pediatria", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_procedencias_multiples.jpg",
+        [
+            Place("caribe", "Caribe"),
+            Place("la guaira", "La Guaira"),
+        ],
+    )
+
+    assert len(records) == 1
+    assert records[0].document_id == "10711859"
+    assert records[0].origin == "Caribe - La Guaira"
+
+
 def test_inline_list_uses_name_plus_any_field_and_keeps_incomplete_rows() -> None:
     records = parse_ocr_lines(
         [
