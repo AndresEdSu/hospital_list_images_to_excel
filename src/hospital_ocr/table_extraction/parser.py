@@ -401,7 +401,10 @@ def parse_table_lines(
             semantic_lines = [anchor.line, *field_lines]
             document_lines = semantic_lines
             document_id = _extract_document(semantic_lines)
-            age, age_unit = _extract_semantic_age(semantic_lines)
+            age, age_unit = _extract_semantic_age(
+                semantic_lines,
+                allow_trailing_name_age=len(section_headings) >= 2,
+            )
             sex_result = _extract_semantic_sex(semantic_lines)
             sex = sex_result.value
             semantic_text = _joined_cell_text(field_lines)

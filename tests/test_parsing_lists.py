@@ -48,6 +48,17 @@ def test_headerless_table_keeps_shifted_rows_from_repeated_sections() -> None:
         "Rosa Torres",
         "Elena Vargas",
     ]
+    assert [record.age for record in records] == [
+        8,
+        9,
+        10,
+        11,
+        12,
+        9,
+        10,
+        12,
+        13,
+    ]
 
 
 def test_free_list_extracts_document_and_fuzzy_place() -> None:
