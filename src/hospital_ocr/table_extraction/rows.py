@@ -18,8 +18,18 @@ from hospital_ocr.table_extraction.detection import (
     headerless_name_candidates,
 )
 from hospital_ocr.table_extraction.schema import header_candidate
-from hospital_ocr.table_extraction.types import RowAnchor, TableSchema
+from hospital_ocr.table_extraction.types import Column, RowAnchor, TableSchema
 from hospital_ocr.text import normalize_text
+
+
+def _name_columns(schema: TableSchema) -> list[tuple[str, Column]]:
+    if "name" in schema.columns:
+        return [("name", schema.columns["name"])]
+    return [
+        (field, schema.columns[field])
+        for field in ("given_names", "surnames")
+        if field in schema.columns
+    ]
 
 
 def has_leading_index(text: str) -> bool:
@@ -109,17 +119,34 @@ def find_row_anchors(
     )
     candidates: list[RowAnchor] = []
     for line in lines:
-        if schema and "name" in schema.columns:
-            name_column = schema.columns["name"]
+        name_field = ""
+        if schema:
             normalized_center = line.center_x / width
-            reaches_name_column = (
-                name_column.start <= normalized_center < name_column.end
-            )
+            reaches_name_column = False
+            for field, name_column in _name_columns(schema):
+                if grid and name_column.grid_index is not None:
+                    in_column = (
+                        grid.column_for_box(line.box)
+                        == name_column.grid_index
+                    )
+                else:
+                    in_column = (
+                        name_column.start
+                        <= normalized_center
+                        < name_column.end
+                    )
+                if in_column:
+                    reaches_name_column = True
+                    name_field = field
+                    break
         else:
             reaches_name_column = id(line) in headerless_name_ids
         if not reaches_name_column or is_header_or_metadata(line):
             continue
-        name = name_from_text(line.text)
+        name = name_from_text(
+            line.text,
+            allow_short_single=name_field in {"given_names", "surnames"},
+        )
         if name:
             candidates.append(RowAnchor(line, name))
 

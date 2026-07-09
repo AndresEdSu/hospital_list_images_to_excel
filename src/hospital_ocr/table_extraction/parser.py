@@ -10,7 +10,12 @@ from hospital_ocr.models import (
     Specialty,
     TableGrid,
 )
-from hospital_ocr.name_splitter import NameLexicons, split_full_name
+from hospital_ocr.name_splitter import (
+    NameLexicons,
+    normalize_identity_text,
+    split_full_name,
+)
+from hospital_ocr.table_extraction.common import name_from_text
 from hospital_ocr.table_extraction.detection import (
     infer_headerless_index_ids as _infer_headerless_index_ids,
     looks_like_table,
@@ -41,6 +46,123 @@ from hospital_ocr.table_extraction.sections import (
     section_for_line as _section_for_line,
 )
 from hospital_ocr.table_extraction.schema import infer_schema as _infer_schema
+from hospital_ocr.table_extraction.types import TableSchema
+from hospital_ocr.text import clean_display_text, normalize_text
+
+
+def _schema_name_fields(schema: TableSchema) -> tuple[str, ...]:
+    if "name" in schema.columns:
+        return ("name",)
+    return tuple(
+        field
+        for field in ("given_names", "surnames")
+        if field in schema.columns
+    )
+
+
+def _schema_name_lines(
+    lines: list[OcrLine],
+    schema: TableSchema,
+    grid: TableGrid | None,
+) -> list[OcrLine]:
+    selected: list[OcrLine] = []
+    for field in _schema_name_fields(schema):
+        selected.extend(
+            line
+            for line in _schema_lines(lines, schema, field, grid)
+            if name_from_text(
+                line.text,
+                allow_short_single=field in {"given_names", "surnames"},
+            )
+        )
+    return selected
+
+
+def _schema_name_text(
+    lines: list[OcrLine],
+    schema: TableSchema,
+    field: str,
+    grid: TableGrid | None,
+) -> str:
+    names = [
+        name
+        for line in _schema_lines(lines, schema, field, grid)
+        if (
+            name := name_from_text(
+                line.text,
+                allow_short_single=True,
+            )
+        )
+    ]
+    return clean_display_text(" ".join(names))
+
+
+def _schema_name_confidence(schema: TableSchema) -> float:
+    columns = [
+        schema.columns[field]
+        for field in _schema_name_fields(schema)
+    ]
+    if not columns:
+        return 0.0
+    return sum(column.confidence for column in columns) / len(columns)
+
+
+def _headerless_left_name_lines(
+    lines: list[OcrLine],
+    anchor: OcrLine,
+    places: list[Place],
+    specialties: list[Specialty],
+    grid: TableGrid | None,
+) -> list[OcrLine]:
+    if grid is None:
+        return []
+    anchor_column = grid.column_for_box(anchor.box)
+    if anchor_column is None:
+        return []
+
+    candidates_by_column: dict[int, list[OcrLine]] = {}
+    for line in lines:
+        if line is anchor:
+            continue
+        column = grid.column_for_box(line.box)
+        if column is None or column >= anchor_column:
+            continue
+        candidate_name = name_from_text(line.text, allow_short_single=True)
+        if not candidate_name:
+            continue
+        if detect_specialty(line.text, specialties) is not None:
+            continue
+        if (
+            len(candidate_name.split()) <= 2
+            and match_places(line.text, places, contextual=True)
+        ):
+            continue
+        candidates_by_column.setdefault(column, []).append(line)
+
+    if not candidates_by_column:
+        return []
+    target_column = max(candidates_by_column)
+    return sorted(
+        candidates_by_column[target_column],
+        key=lambda item: item.center_x,
+    )
+
+
+def _line_names(lines: list[OcrLine]) -> str:
+    return clean_display_text(
+        " ".join(
+            name
+            for line in sorted(lines, key=lambda item: item.center_x)
+            if (name := name_from_text(line.text, allow_short_single=True))
+        )
+    )
+
+
+def _has_surname_hint(text: str, lexicons: NameLexicons) -> bool:
+    return any(
+        normalize_text(token) in lexicons.surnames
+        for token in text.split()
+    )
 
 
 def parse_table_lines(
@@ -156,6 +278,19 @@ def parse_table_lines(
         row_lines = [line for line in row_lines if line not in index_lines]
         index_detected = bool(index_lines or _has_leading_index(anchor.line.text))
         if schema:
+            has_explicit_document = "document" in schema.columns
+            name_lines = _schema_name_lines(row_lines, schema, grid)
+            has_split_name_columns = (
+                "given_names" in schema.columns
+                and "surnames" in schema.columns
+            )
+            given_name_text = _schema_name_text(
+                row_lines, schema, "given_names", grid
+            )
+            surname_text = _schema_name_text(
+                row_lines, schema, "surnames", grid
+            )
+            headerless_given_name_text = ""
             document_lines = _schema_lines(
                 row_lines, schema, "document", grid
             )
@@ -166,6 +301,11 @@ def parse_table_lines(
                 row_lines, schema, "specialty", grid
             )
             document_id = _extract_document(document_lines)
+            if not document_id and not has_explicit_document:
+                document_lines = [
+                    line for line in row_lines if line not in name_lines
+                ]
+                document_id = _extract_document(document_lines)
             age = _extract_schema_age(age_lines)
             age_unit = "años" if age is not None else ""
             sex_result = _extract_schema_sex(
@@ -181,7 +321,25 @@ def parse_table_lines(
                 row_lines, schema, "specialty", grid
             )
         else:
-            field_lines = _headerless_field_lines(row_lines, anchor, grid)
+            headerless_given_name_lines = _headerless_left_name_lines(
+                row_lines,
+                anchor.line,
+                places,
+                specialties,
+                grid,
+            )
+            name_lines = [*headerless_given_name_lines, anchor.line]
+            has_split_name_columns = False
+            given_name_text = ""
+            surname_text = ""
+            headerless_given_name_text = _line_names(
+                headerless_given_name_lines
+            )
+            field_lines = [
+                line
+                for line in _headerless_field_lines(row_lines, anchor, grid)
+                if line not in headerless_given_name_lines
+            ]
             semantic_lines = [anchor.line, *field_lines]
             document_lines = semantic_lines
             document_id = _extract_document(semantic_lines)
@@ -196,6 +354,7 @@ def parse_table_lines(
             sex_lines = field_lines
             origin_lines = field_lines
             specialty_lines = field_lines
+            has_explicit_document = False
 
         has_explicit_origin = bool(schema and "origin" in schema.columns)
         place_matches = match_places(
@@ -231,9 +390,99 @@ def parse_table_lines(
         detected_specialty = row_specialty or contextual_specialty
         specialty = detected_specialty[0] if detected_specialty else ""
         area = detected_specialty[1] if detected_specialty else ""
-        name_split = split_full_name(anchor.name, name_lexicons)
+        if has_split_name_columns:
+            given_name_text = normalize_identity_text(
+                given_name_text,
+                name_lexicons,
+                role="given",
+            )
+            surname_text = normalize_identity_text(
+                surname_text,
+                name_lexicons,
+                role="surname",
+            )
+            full_name = clean_display_text(
+                " ".join(
+                    part for part in (given_name_text, surname_text) if part
+                )
+            ) or anchor.name
+            first_name = given_name_text
+            last_name = surname_text
+            name_split_confidence = min(
+                1.0,
+                _average_score(name_lines, anchor.line.score)
+                * (1.0 if first_name and last_name else 0.75),
+            )
+            detected_name_order = "Nombre-Apellido"
+            name_split_reliable = bool(first_name and last_name)
+        elif headerless_given_name_text:
+            headerless_given_name_text = normalize_identity_text(
+                headerless_given_name_text,
+                name_lexicons,
+                role="given",
+            )
+            headerless_surname_text = normalize_identity_text(
+                anchor.name,
+                name_lexicons,
+                role="surname",
+            )
+            full_name = clean_display_text(
+                f"{headerless_given_name_text} {headerless_surname_text}"
+            )
+            first_name = headerless_given_name_text
+            last_name = headerless_surname_text
+            name_split_confidence = min(
+                1.0,
+                _average_score(name_lines, anchor.line.score),
+            )
+            detected_name_order = "Nombre-Apellido"
+            name_split_reliable = True
+        else:
+            source_name = (
+                normalize_identity_text(
+                    anchor.name,
+                    name_lexicons,
+                    role="mixed",
+                )
+                if schema and "name" in schema.columns
+                else anchor.name
+            )
+            name_split = split_full_name(source_name, name_lexicons)
+            if schema is None and not name_split.reliable:
+                surname_only = normalize_identity_text(
+                    anchor.name,
+                    name_lexicons,
+                    role="surname",
+                )
+                if (
+                    surname_only != anchor.name
+                    or _has_surname_hint(surname_only, name_lexicons)
+                ):
+                    full_name = surname_only
+                    first_name = ""
+                    last_name = surname_only
+                    name_split_confidence = min(
+                        1.0,
+                        _average_score(name_lines, anchor.line.score) * 0.75,
+                    )
+                    detected_name_order = "Indeterminado"
+                    name_split_reliable = False
+                else:
+                    full_name = source_name
+                    first_name = name_split.first_name
+                    last_name = name_split.last_name
+                    name_split_confidence = name_split.confidence
+                    detected_name_order = name_split.detected_order
+                    name_split_reliable = name_split.reliable
+            else:
+                full_name = source_name
+                first_name = name_split.first_name
+                last_name = name_split.last_name
+                name_split_confidence = name_split.confidence
+                detected_name_order = name_split.detected_order
+                name_split_reliable = name_split.reliable
         notes: list[str] = []
-        if not name_split.reliable:
+        if not name_split_reliable:
             notes.append("Separación de nombre no confiable")
         if age is None:
             notes.append("Edad no reconocida")
@@ -269,8 +518,8 @@ def parse_table_lines(
         if schema:
             name_confidence = min(
                 1.0,
-                anchor.line.score
-                * (0.80 + 0.20 * schema.columns["name"].confidence),
+                _average_score(name_lines, anchor.line.score)
+                * (0.80 + 0.20 * _schema_name_confidence(schema)),
             )
             document_confidence = (
                 min(
@@ -279,6 +528,8 @@ def parse_table_lines(
                     * (0.80 + 0.20 * schema.columns["document"].confidence),
                 )
                 if document_id and "document" in schema.columns
+                else min(1.0, _average_score(document_lines) * 0.75)
+                if document_id
                 else 0.0
             )
             age_confidence = (
@@ -324,6 +575,8 @@ def parse_table_lines(
                 ),
                 "cédula": (
                     "formato y columna inferida por encabezado"
+                    if document_id and has_explicit_document
+                    else "formato de documento en la fila sin encabezado"
                     if document_id
                     else ""
                 ),
@@ -414,11 +667,11 @@ def parse_table_lines(
             }
         records.append(
             PatientRecord(
-                full_name=anchor.name,
-                first_name=name_split.first_name,
-                last_name=name_split.last_name,
-                name_split_confidence=name_split.confidence,
-                detected_name_order=name_split.detected_order,
+                full_name=full_name,
+                first_name=first_name,
+                last_name=last_name,
+                name_split_confidence=name_split_confidence,
+                detected_name_order=detected_name_order,
                 center=center,
                 age=age,
                 age_unit=age_unit,

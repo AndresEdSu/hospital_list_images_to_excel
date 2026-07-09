@@ -53,14 +53,23 @@ HEADER_WORDS = {
     "afiliacion",
     "diagnostico",
     "historia",
+    "numero",
 }
 HEADER_ALIASES = {
     "name": (
         "nombre y apellido",
+        "nombres y apellidos",
+        "nombre apellido",
         "apellidos y nombres",
         "nombre completo",
         "paciente",
+    ),
+    "given_names": (
+        "nombres",
         "nombre",
+    ),
+    "surnames": (
+        "apellidos",
         "apellido",
     ),
     "document": (
@@ -71,7 +80,7 @@ HEADER_ALIASES = {
         "c i",
         "ci",
     ),
-    "age": ("edad", "anos", "ano"),
+    "age": ("edad", "unidad"),
     "sex": ("sexo", "genero"),
     "origin": (
         "lugar de procedencia",
@@ -95,10 +104,14 @@ HEADER_ALIASES = {
 }
 NON_NAME_WORDS = {
     "am",
+    "ano",
+    "anos",
     "pm",
     "pn",
     "ci",
     "cama",
+    "dato",
+    "datos",
     "sala",
     "edad",
     "sexo",
@@ -108,6 +121,8 @@ NON_NAME_WORDS = {
     "nombre",
     "apellido",
     "nocturno",
+    "numero",
+    "sin",
 }
 
 
@@ -153,7 +168,11 @@ def remove_semantic_age_tokens(text: str) -> str:
     return "".join(characters)
 
 
-def name_from_text(text: str) -> str:
+def name_from_text(
+    text: str,
+    *,
+    allow_short_single: bool = False,
+) -> str:
     cleaned = DATE_RE.sub(" ", text)
     cleaned = TIME_RE.sub(" ", cleaned)
     cleaned = DOCUMENT_RE.sub(" ", cleaned)
@@ -167,7 +186,7 @@ def name_from_text(text: str) -> str:
     ]
     if not 1 <= len(words) <= 6:
         return ""
-    if len(words) == 1 and len(words[0]) < 6:
+    if len(words) == 1 and len(words[0]) < 6 and not allow_short_single:
         return ""
     return clean_display_text(" ".join(words))
 

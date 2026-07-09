@@ -122,6 +122,83 @@ def test_table_parser_extracts_comma_documents_and_multiple_origins() -> None:
     assert records[1].origin == "La Guaira"
 
 
+def test_table_parser_extracts_separate_name_and_surname_columns() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Numero", 20, 20, 70),
+            table_line("Nombres", 20, 90, 210),
+            table_line("Apellidos", 20, 250, 390),
+            table_line("C.I.", 20, 430, 520),
+            table_line("Edad", 20, 560, 640),
+            table_line("Sexo", 20, 680, 740),
+            table_line("1", 100, 25, 45),
+            table_line("Maria", 100, 100, 190),
+            table_line("Perez SIN DATOS", 100, 260, 410),
+            table_line("12.345.678", 100, 425, 525),
+            table_line("38", 100, 570, 620),
+            table_line("F", 100, 690, 715),
+            table_line("2", 145, 25, 45),
+            table_line("Ana", 145, 100, 170),
+            table_line("Paz SIN DATOS", 145, 260, 405),
+            table_line("9.876.543", 145, 430, 525),
+            table_line("42", 145, 570, 620),
+            table_line("M", 145, 690, 715),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "nombres_apellidos_separados.jpg",
+    )
+
+    assert len(records) == 2
+    assert records[0].full_name == "Maria Perez"
+    assert records[0].first_name == "Maria"
+    assert records[0].last_name == "Perez"
+    assert records[0].document_id == "12345678"
+    assert records[0].age == 38
+    assert records[0].sex == "F"
+    assert records[1].full_name == "Ana Paz"
+    assert records[1].first_name == "Ana"
+    assert records[1].last_name == "Paz"
+    assert records[1].document_id == "9876543"
+
+
+def test_table_parser_recovers_unlabeled_documents_in_schema_rows() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Nombres", 20, 90, 210),
+            table_line("Apellidos", 20, 250, 390),
+            table_line("Edad", 20, 650, 720),
+            table_line("Unidad", 20, 760, 850),
+            table_line("Maria", 100, 100, 190),
+            table_line("Perez", 100, 260, 350),
+            table_line("12.345.678", 100, 500, 600),
+            table_line("38", 100, 675, 715),
+            table_line("anos", 100, 760, 820),
+            table_line("Ana", 145, 100, 170),
+            table_line("Paz", 145, 260, 320),
+            table_line("9.876.543", 145, 500, 595),
+            table_line("42", 145, 675, 715),
+            table_line("anos", 145, 760, 820),
+        ],
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "cedulas_sin_encabezado.jpg",
+    )
+
+    assert len(records) == 2
+    assert records[0].document_id == "12345678"
+    assert records[0].age == 38
+    assert records[0].document_confidence > 0
+    assert any(
+        "sin encabezado" in evidence
+        for evidence in records[0].field_evidence.values()
+    )
+    assert records[1].document_id == "9876543"
+    assert records[1].age == 42
+
+
 def test_ignored_bed_column_limits_origin_without_exporting_bed_values() -> None:
     records = parse_ocr_lines(
         [
@@ -210,6 +287,56 @@ def test_headerless_table_without_indexes_age_or_sex_is_detected() -> None:
     assert len(records) == 6
     assert all(record.age is None for record in records)
     assert all(record.sex == "" for record in records)
+
+
+def test_headerless_grid_combines_left_given_names_with_surname_anchors() -> None:
+    grid = TableGrid(
+        tuple(GridBoundary(0.0, 50 + index * 45, 1.0) for index in range(8)),
+        tuple(
+            GridBoundary(0.0, position, 1.0)
+            for position in (0, 180, 460, 700, 930)
+        ),
+        1.0,
+    )
+    rows = [
+        ("MARIA", "MAYORA", "26,368,781"),
+        ("JOSE", "CONTRERAS", "5,075,671"),
+        ("ANA", "MARTINEZ", "12,345,678"),
+        ("LUIS", "RODRIGUEZ", "9,876,543"),
+        ("SIEL", "LAREZ LAZO", "36,568,121"),
+        ("NADIUSKA DEL VALLE", "MARTINEZ TOVAR", "12,000,000"),
+    ]
+    lines: list[OcrLine] = []
+    for index, (given_name, surname, document) in enumerate(rows):
+        y = 62 + index * 45
+        lines.extend(
+            [
+                table_line(given_name, y, 220, 330),
+                table_line(surname, y, 500, 650),
+                table_line(document, y, 740, 880),
+            ]
+        )
+
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "nombres_apellidos_sin_encabezado.jpg",
+        [Place("valle", "Valle")],
+        grid,
+    )
+
+    assert len(records) == 6
+    assert records[0].full_name == "MARIA MAYORA"
+    assert records[0].first_name == "MARIA"
+    assert records[0].last_name == "MAYORA"
+    assert records[0].document_id == "26368781"
+    assert records[1].full_name == "JOSE CONTRERAS"
+    assert records[3].full_name == "LUIS RODRIGUEZ"
+    assert records[4].first_name == "SIEL"
+    assert records[4].last_name == "LAREZ LAZO"
+    assert records[5].full_name == "NADIUSKA DEL VALLE MARTINEZ TOVAR"
 
 
 def test_headerless_reordered_columns_are_classified_by_content() -> None:

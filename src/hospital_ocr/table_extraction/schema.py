@@ -21,6 +21,23 @@ from hospital_ocr.table_extraction.types import (
 from hospital_ocr.text import clean_display_text, normalize_text
 
 
+def _has_name_fields(fields: set[str]) -> bool:
+    return bool(
+        {"name", "given_names"} & fields
+        or {"given_names", "surnames"} <= fields
+    )
+
+
+def _rightmost_name_grid_index(schema: TableSchema) -> int | None:
+    indexes = [
+        schema.columns[field].grid_index
+        for field in ("name", "given_names", "surnames")
+        if field in schema.columns
+        and schema.columns[field].grid_index is not None
+    ]
+    return max(indexes) if indexes else None
+
+
 def header_candidate(line: OcrLine) -> HeaderCandidate | None:
     normalized = normalize_text(line.text)
     if not normalized:
@@ -167,7 +184,7 @@ def infer_schema(
         cluster
         for cluster in clusters
         if len({item.field for item in cluster}) >= 2
-        and "name" in {item.field for item in cluster}
+        and _has_name_fields({item.field for item in cluster})
     ]
     if not eligible:
         return None
@@ -243,7 +260,8 @@ def complete_partial_schema(
     lines: list[OcrLine],
     grid: TableGrid | None,
 ) -> TableSchema:
-    if grid is None or "name" not in schema.columns:
+    name_grid_index = _rightmost_name_grid_index(schema)
+    if grid is None or name_grid_index is None:
         return schema
 
     used_grid_indexes = {
@@ -252,7 +270,6 @@ def complete_partial_schema(
         if column.grid_index is not None
         and not field.startswith("ignored_unknown_")
     }
-    name_grid_index = schema.columns["name"].grid_index
     by_column_and_row: dict[int, dict[int, list[OcrLine]]] = {}
     for line in lines:
         if line.center_y <= schema.header_bottom:
