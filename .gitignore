@@ -1,8 +1,11 @@
-# Entornos y secretos
+# Entornos y secretos locales
 .env
+.env.*
+!.env.example
 .venv/
+.streamlit/secrets.toml
 
-# Cachés de Python y herramientas
+# Caches de Python y herramientas
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -12,16 +15,18 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .cache/
+*.log
+*.tmp
 
 # Datos sensibles y resultados generados
-data/input/images/*
+data/input/images/**
 !data/input/images/.gitkeep
-data/evaluation/*
-data/interim/*
+data/evaluation/**
+data/interim/**
 !data/interim/.gitkeep
-data/output/*
+data/output/**
 !data/output/.gitkeep
-data/cache/
+data/cache/**
 
 # Editores y sistema operativo
 .idea/
@@ -29,5 +34,5 @@ data/cache/
 .DS_Store
 Thumbs.db
 
-# Notes
+# Notas locales
 notes.txt
