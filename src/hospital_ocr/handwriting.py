@@ -300,6 +300,38 @@ def needs_row_ocr(lines: list[OcrLine], rows: list[TextRow]) -> bool:
     return coverage < 0.72 or merged_lines > 0
 
 
+def row_segmentation_is_too_coarse(
+    lines: list[OcrLine],
+    rows: list[TextRow],
+) -> bool:
+    if len(rows) < 4 or len(lines) < len(rows) * 1.5:
+        return False
+    if row_ocr_coverage(lines, rows) < 0.85:
+        return False
+
+    populated_rows = 0
+    coarse_rows = 0
+    for row in rows:
+        centers = sorted(
+            line.center_y
+            for line in lines
+            if row.box[1] <= line.center_y < row.box[3]
+        )
+        if not centers:
+            continue
+        populated_rows += 1
+        if (
+            len(centers) >= 2
+            and centers[-1] - centers[0] >= max(30.0, row.height * 0.28)
+        ):
+            coarse_rows += 1
+
+    return (
+        populated_rows >= 4
+        and coarse_rows >= max(3, round(populated_rows * 0.45))
+    )
+
+
 def merge_row_ocr(
     initial_lines: list[OcrLine],
     row_lines: list[OcrLine],

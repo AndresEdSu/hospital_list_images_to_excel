@@ -19,7 +19,45 @@ from hospital_ocr.table_extraction.detection import (
 )
 from hospital_ocr.table_extraction.schema import header_candidate
 from hospital_ocr.table_extraction.types import Column, RowAnchor, TableSchema
-from hospital_ocr.text import normalize_text
+from hospital_ocr.text import clean_display_text, normalize_text
+
+
+ADMIN_NAME_PREFIX_TOKENS = {
+    "cama",
+    "camilla",
+    "camille",
+    "canilla",
+    "cana",
+    "cann",
+    "camn",
+    "camo",
+    "cimilla",
+    "camiliae",
+    "chna",
+    "chnilh",
+    "chnn",
+    "chime",
+}
+ADMIN_NAME_PREFIX_GLUES = ("hnill",)
+ADMIN_NAME_PREFIX_INTROS = {"tem", "item"}
+ADMIN_CONTEXT_CONNECTORS = {"ca", "da", "de", "do", "gwa", "in", "lo", "oda", "qx"}
+ADMIN_CONTEXT_SUFFIXES = {
+    "anes",
+    "catia",
+    "cavers",
+    "cmie",
+    "enrniz",
+    "gnara",
+    "gnnia",
+    "grvaiz",
+    "guaira",
+    "guni",
+    "gunie",
+    "gunina",
+    "guraia",
+    "gune",
+    "gnaiz",
+}
 
 
 def _name_columns(schema: TableSchema) -> list[tuple[str, Column]]:
@@ -102,6 +140,114 @@ def header_cutoff(lines: list[OcrLine]) -> float | None:
     return max(line.center_y for line in header_lines) + 8
 
 
+def _looks_like_admin_name_prefix(token: str) -> bool:
+    return normalize_text(token) in ADMIN_NAME_PREFIX_TOKENS
+
+
+def _strip_glued_admin_prefix(token: str) -> str:
+    normalized = normalize_text(token).replace(" ", "")
+    for prefix in ADMIN_NAME_PREFIX_GLUES:
+        if normalized.startswith(prefix) and len(normalized) - len(prefix) >= 4:
+            return token[len(prefix) :]
+    return token
+
+
+def _has_admin_name_prefix(name: str) -> bool:
+    tokens = name.split()
+    if not tokens:
+        return False
+    index = 0
+    if (
+        len(tokens) > 1
+        and normalize_text(tokens[0]) in ADMIN_NAME_PREFIX_INTROS
+    ):
+        index = 1
+    return _looks_like_admin_name_prefix(tokens[index]) or (
+        _strip_glued_admin_prefix(tokens[index]) != tokens[index]
+    )
+
+
+def _tail_matches_place(tokens: list[str], start: int, places: list[Place]) -> bool:
+    return bool(places and match_place(" ".join(tokens[start:]), places))
+
+
+def _strip_trailing_admin_context(
+    tokens: list[str],
+    places: list[Place],
+) -> list[str]:
+    for index in range(2, len(tokens)):
+        normalized = normalize_text(tokens[index])
+        if normalized in ADMIN_CONTEXT_SUFFIXES:
+            return tokens[:index]
+        if _tail_matches_place(tokens, index, places):
+            return tokens[:index]
+        if normalized not in ADMIN_CONTEXT_CONNECTORS:
+            continue
+        if index + 1 >= len(tokens):
+            return tokens[:index]
+        next_normalized = normalize_text(tokens[index + 1])
+        if (
+            next_normalized in ADMIN_CONTEXT_SUFFIXES
+            or _tail_matches_place(tokens, index + 1, places)
+            or any(
+                normalize_text(token) in ADMIN_CONTEXT_SUFFIXES
+                for token in tokens[index + 2 : index + 4]
+            )
+        ):
+            return tokens[:index]
+    return tokens
+
+
+def _strip_repeated_admin_name_noise(
+    name: str,
+    places: list[Place],
+) -> str:
+    tokens = name.split()
+    if not tokens:
+        return ""
+    index = 0
+    if (
+        len(tokens) > 1
+        and normalize_text(tokens[0]) in ADMIN_NAME_PREFIX_INTROS
+        and _looks_like_admin_name_prefix(tokens[1])
+    ):
+        index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        stripped = _strip_glued_admin_prefix(token)
+        if stripped != token:
+            tokens[index] = stripped
+            break
+        if not _looks_like_admin_name_prefix(token):
+            break
+        index += 1
+    tokens = tokens[index:]
+    tokens = _strip_trailing_admin_context(tokens, places)
+    return clean_display_text(" ".join(tokens))
+
+
+def _clean_repeated_admin_name_prefixes(
+    candidates: list[RowAnchor],
+    places: list[Place],
+) -> list[RowAnchor]:
+    if len(candidates) < 4:
+        return candidates
+    prefixed_count = sum(
+        _has_admin_name_prefix(candidate.name)
+        for candidate in candidates
+    )
+    if prefixed_count < max(3, round(len(candidates) * 0.25)):
+        return candidates
+
+    cleaned: list[RowAnchor] = []
+    for candidate in candidates:
+        clean_name = _strip_repeated_admin_name_noise(candidate.name, places)
+        name_words = clean_name.split()
+        if clean_name and not (len(name_words) == 1 and len(name_words[0]) < 6):
+            cleaned.append(RowAnchor(candidate.line, clean_name))
+    return cleaned or candidates
+
+
 def find_row_anchors(
     lines: list[OcrLine],
     schema: TableSchema | None = None,
@@ -149,6 +295,12 @@ def find_row_anchors(
         )
         if name:
             candidates.append(RowAnchor(line, name))
+
+    if schema is None:
+        candidates = _clean_repeated_admin_name_prefixes(
+            candidates,
+            places or [],
+        )
 
     if not candidates:
         return []

@@ -1,7 +1,14 @@
 from hospital_ocr.models import GridBoundary, OcrLine, Place, Specialty, TableGrid
 from hospital_ocr.parsing import parse_ocr_lines
+from hospital_ocr.table_extraction.common import name_from_text
 from hospital_ocr.table_parser import looks_like_table
 from tests.parsing_helpers import LEXICONS, table_line
+
+
+def test_name_from_text_strips_explicit_bed_prefixes() -> None:
+    assert name_from_text("Cama 12 Maria Perez") == "Maria Perez"
+    assert name_from_text("Camilla 08 Luis Gomez") == "Luis Gomez"
+    assert name_from_text("Jose Luis Perez") == "Jose Luis Perez"
 
 
 def test_table_parser_extracts_columns_and_keeps_plan_as_observation() -> None:
@@ -287,6 +294,35 @@ def test_headerless_table_without_indexes_age_or_sex_is_detected() -> None:
     assert len(records) == 6
     assert all(record.age is None for record in records)
     assert all(record.sex == "" for record in records)
+
+
+def test_headerless_table_strips_repeated_bed_prefix_noise() -> None:
+    lines = [
+        table_line("Camille 1 Maria Perez Guaira", 100, 100, 420),
+        table_line("Canilla 2 Luis Gomez Catia", 145, 100, 400),
+        table_line("Chna 3 Maria Gomez da Guni", 190, 100, 430),
+        table_line("Cann 4 Luis Perez de GnAra", 235, 100, 430),
+        table_line("Tem CAmn 5 Maria Perez Cavers", 280, 100, 460),
+        table_line("HnillLuis Gomez", 325, 100, 300),
+    ]
+
+    records = parse_ocr_lines(
+        lines,
+        [],
+        LEXICONS,
+        "Hospital de Prueba",
+        "cama_repetida_sin_encabezados.jpg",
+        [Place("guaira", "Guaira"), Place("catia", "Catia")],
+    )
+
+    assert [record.full_name for record in records] == [
+        "Maria Perez",
+        "Luis Gomez",
+        "Maria Gomez",
+        "Luis Perez",
+        "Maria Perez",
+        "Luis Gomez",
+    ]
 
 
 def test_headerless_grid_combines_left_given_names_with_surname_anchors() -> None:

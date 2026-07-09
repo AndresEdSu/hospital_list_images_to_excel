@@ -17,6 +17,15 @@ TIME_RE = re.compile(
     r"\b\d{1,2}\s*[:.]\s*\d{2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?",
     re.IGNORECASE,
 )
+LEADING_ADMIN_NAME_PREFIX_RE = re.compile(
+    r"^\s*"
+    r"(?:cama|camilla|cam|hab(?:itacion)?|habitacion|cubiculo|box|silla)"
+    r"\b"
+    r"(?:\s*(?:n(?:ro|o)?|num(?:ero)?)\.?)?"
+    r"(?:[^A-Za-z0-9]+[A-Za-z]?\d{1,3}[A-Za-z]?|\s+[A-Za-z]?\d{1,3}[A-Za-z]?)?"
+    r"[^A-Za-z0-9]*",
+    re.IGNORECASE,
+)
 DATE_RE = re.compile(r"\b\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{2,4}\b")
 SEMANTIC_AGE_RE = re.compile(
     r"(?<![A-Za-z0-9])"
@@ -110,6 +119,15 @@ NON_NAME_WORDS = {
     "pn",
     "ci",
     "cama",
+    "camilla",
+    "cam",
+    "hab",
+    "habitacion",
+    "cubiculo",
+    "box",
+    "silla",
+    "an",
+    "ban",
     "dato",
     "datos",
     "sala",
@@ -177,6 +195,7 @@ def name_from_text(
     cleaned = TIME_RE.sub(" ", cleaned)
     cleaned = DOCUMENT_RE.sub(" ", cleaned)
     cleaned = remove_semantic_age_tokens(cleaned)
+    cleaned = LEADING_ADMIN_NAME_PREFIX_RE.sub(" ", cleaned)
     cleaned = re.sub(r"^\s*\d{1,3}\s*[.):\-]?\s*", " ", cleaned)
     cleaned = re.sub(r"\b(?:a|p)\s*\.?\s*m\.?\b", " ", cleaned, flags=re.I)
     words = [

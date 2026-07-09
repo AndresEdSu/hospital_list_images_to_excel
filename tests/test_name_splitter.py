@@ -8,6 +8,8 @@ from hospital_ocr.name_splitter import (
 LEXICONS = NameLexicons(
     given_names={
         "jose": 1.0,
+        "leon": 1.0,
+        "leonelis": 1.0,
         "maria": 1.0,
         "margarita": 1.0,
         "luis": 1.0,
@@ -109,6 +111,13 @@ def test_known_single_term_is_not_split() -> None:
     assert (
         normalize_identity_text("MARTINEZ", LEXICONS, role="surname")
         == "MARTINEZ"
+    )
+
+
+def test_known_single_given_name_is_not_split() -> None:
+    assert (
+        normalize_identity_text("LEONELIS", LEXICONS, role="given")
+        == "LEONELIS"
     )
 
 

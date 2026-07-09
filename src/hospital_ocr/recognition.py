@@ -10,6 +10,7 @@ from hospital_ocr.handwriting import (
     merge_grid_ocr,
     merge_row_ocr,
     needs_row_ocr,
+    row_segmentation_is_too_coarse,
     row_ocr_coverage,
     rows_from_grid,
 )
@@ -191,6 +192,25 @@ def recognize_image(
                     "No se pudieron delimitar recortes; se usó OCR global."
                 ),
                 grid=grid,
+            )
+        if row_segmentation_is_too_coarse(initial_lines, rows):
+            return initial_lines, row_audit(
+                mode=mode,
+                rows=rows,
+                lines=initial_lines,
+                coverage_before=row_ocr_coverage(initial_lines, rows),
+                boundary_source=boundary_source,
+                fallback_reason=(
+                    "Los renglones detectados agrupan varias filas; "
+                    "se usó OCR global."
+                ),
+                grid=grid,
+                refinement={
+                    "renglones_totales": len(rows),
+                    "renglones_seleccionados": 0,
+                    "proporcion": 0.0,
+                    "renglones_demasiado_amplios": True,
+                },
             )
         selected_rows = select_rows_for_refinement(
             rows,

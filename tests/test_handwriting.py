@@ -9,6 +9,7 @@ from hospital_ocr.handwriting import (
     merge_grid_ocr,
     merge_row_ocr,
     needs_row_ocr,
+    row_segmentation_is_too_coarse,
     row_ocr_coverage,
 )
 from hospital_ocr.models import GridBoundary, OcrLine, TableGrid
@@ -46,6 +47,22 @@ def test_low_row_coverage_activates_segmented_ocr() -> None:
 
     assert row_ocr_coverage(lines, rows) == 0.4
     assert needs_row_ocr(lines, rows)
+
+
+def test_row_segmentation_is_too_coarse_when_rows_group_multiple_lines() -> None:
+    rows = [
+        TextRow((0, index * 120, 800, (index + 1) * 120), 10)
+        for index in range(4)
+    ]
+    lines = [
+        _line(f"fila {index} a", index * 120 + 20)
+        for index in range(4)
+    ] + [
+        _line(f"fila {index} b", index * 120 + 80)
+        for index in range(4)
+    ]
+
+    assert row_segmentation_is_too_coarse(lines, rows)
 
 
 def test_merge_row_ocr_replaces_only_rows_recovered_by_fallback() -> None:
