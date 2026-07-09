@@ -130,6 +130,22 @@ def test_contextual_place_match_requires_a_clear_catalog_winner() -> None:
     assert ambiguous is None
 
 
+def test_place_match_accepts_institutional_origin_aliases() -> None:
+    places = [
+        Place("estado suere", "Estado Sucre"),
+        Place("hospital periferico de pariata", "Hospital Periferico de Pariata"),
+        Place("hosp periferico pariatra", "Hospital Periferico de Pariata"),
+    ]
+
+    state = match_place("Estado Suere (Cl)", places, contextual=True)
+    hospital = match_place("Hosp. Periferico pariatra", places, contextual=True)
+
+    assert state is not None
+    assert state.name == "Estado Sucre"
+    assert hospital is not None
+    assert hospital.name == "Hospital Periferico de Pariata"
+
+
 def test_specialty_match_tolerates_removed_space() -> None:
     specialties = [
         Specialty("medicina", "Medicina general", ""),
