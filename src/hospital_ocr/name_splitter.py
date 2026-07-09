@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from hospital_ocr.text import normalize_text
+from hospital_ocr.text import clean_display_text, normalize_text
 
 
 SURNAME_CONNECTORS = {"de", "del", "la", "las", "los", "y"}
@@ -34,6 +34,13 @@ class _Candidate:
     last_name: str
     score: float
     order: str
+
+
+@dataclass(frozen=True)
+class _IdentitySegment:
+    text: str
+    score: float
+    known: bool
 
 
 def _load_terms(path: Path) -> dict[str, float]:
@@ -101,6 +108,135 @@ def _token_score(token: str, role: str, lexicons: NameLexicons) -> float:
         if opposite_fuzzy >= 0.84 and opposite_fuzzy > expected_fuzzy + 0.05:
             return 0.10
     return 0.70
+
+
+def _format_matched_term(term: str, raw: str) -> str:
+    if raw.isupper():
+        return term.upper()
+    if raw[:1].isupper():
+        return term.title()
+    return term
+
+
+def _exact_or_ocr_match(
+    normalized: str,
+    raw: str,
+    role: str,
+    lexicons: NameLexicons,
+) -> _IdentitySegment | None:
+    term_groups: list[dict[str, float]] = []
+    if role in {"given", "mixed"}:
+        term_groups.append(lexicons.given_names)
+    if role in {"surname", "mixed"}:
+        term_groups.append(lexicons.surnames)
+
+    if role in {"surname", "mixed"} and normalized in SURNAME_CONNECTORS:
+        return _IdentitySegment(raw, 0.95, False)
+
+    variants = [normalized]
+    if normalized.startswith("i") and len(normalized) >= 4:
+        variants.append("j" + normalized[1:])
+    if "0" in normalized:
+        variants.append(normalized.replace("0", "o"))
+    if "1" in normalized:
+        variants.append(normalized.replace("1", "i"))
+
+    for variant in dict.fromkeys(variants):
+        for terms in term_groups:
+            weight = terms.get(variant)
+            if weight is None:
+                continue
+            text = raw if variant == normalized else _format_matched_term(
+                variant,
+                raw,
+            )
+            score = weight if variant == normalized else min(0.92, weight)
+            return _IdentitySegment(text, score, True)
+    return None
+
+
+def _segment_piece(
+    raw: str,
+    normalized: str,
+    role: str,
+    lexicons: NameLexicons,
+) -> _IdentitySegment | None:
+    matched = _exact_or_ocr_match(normalized, raw, role, lexicons)
+    if matched is not None:
+        return matched
+    if len(normalized) >= 4:
+        return _IdentitySegment(raw, 0.55, False)
+    return None
+
+
+def _split_glued_token(
+    token: str,
+    role: str,
+    lexicons: NameLexicons,
+) -> list[str]:
+    normalized = normalize_text(token).replace(" ", "")
+    if len(normalized) < 7 or len(normalized) != len(token):
+        return [token]
+    if _exact_or_ocr_match(normalized, token, role, lexicons) is not None:
+        return [token]
+
+    best: tuple[float, int, int, list[_IdentitySegment]] | None = None
+    max_pieces = 4
+    max_piece_length = 14
+
+    def visit(start: int, pieces: list[_IdentitySegment]) -> None:
+        nonlocal best
+        if start == len(normalized):
+            if len(pieces) < 2 or not any(piece.known for piece in pieces):
+                return
+            if not any(
+                piece.known and len(normalize_text(piece.text)) >= 4
+                for piece in pieces
+            ):
+                return
+            score = sum(piece.score for piece in pieces) / len(pieces)
+            if score < 0.72:
+                return
+            candidate = (
+                score,
+                sum(piece.known for piece in pieces),
+                -len(pieces),
+                pieces.copy(),
+            )
+            if best is None or candidate[:3] > best[:3]:
+                best = candidate
+            return
+        if len(pieces) >= max_pieces:
+            return
+
+        remaining_slots = max_pieces - len(pieces) - 1
+        for end in range(start + 2, min(len(normalized), start + max_piece_length) + 1):
+            remaining = len(normalized) - end
+            if remaining and remaining > remaining_slots * max_piece_length:
+                continue
+            raw_piece = token[start:end]
+            normalized_piece = normalized[start:end]
+            piece = _segment_piece(raw_piece, normalized_piece, role, lexicons)
+            if piece is None:
+                continue
+            visit(end, [*pieces, piece])
+
+    visit(0, [])
+    return [piece.text for piece in best[3]] if best is not None else [token]
+
+
+def normalize_identity_text(
+    text: str,
+    lexicons: NameLexicons,
+    *,
+    role: str,
+) -> str:
+    if role not in {"given", "surname", "mixed"}:
+        raise ValueError(f"Rol de identidad invÃ¡lido: {role}")
+    parts: list[str] = []
+    for token in TOKEN_RE.findall(text):
+        parts.extend(_split_glued_token(token, role, lexicons))
+    return clean_display_text(" ".join(parts))
 
 
 def _candidate_score(

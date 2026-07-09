@@ -15,6 +15,52 @@ def test_short_name_list_is_not_assumed_to_be_table() -> None:
     assert looks_like_table(lines) is False
 
 
+def test_headerless_table_keeps_shifted_rows_from_repeated_sections() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Pediatria Piso 6", 20, 20, 300),
+            table_line("Maria Perez 8", 90, 40, 260),
+            table_line("Luis Gomez 9", 140, 40, 260),
+            table_line("Ana Rivera 10", 190, 40, 275),
+            table_line("Carla Medina 11", 240, 40, 290),
+            table_line("Rosa Torres 12", 290, 40, 280),
+            table_line("Pediatria Piso 6", 370, 90, 350),
+            table_line("Luis Gomez 9", 440, 110, 330),
+            table_line("Ana Rivera 10", 490, 110, 345),
+            table_line("Rosa Torres 12", 540, 110, 350),
+            table_line("Elena Vargas 13", 590, 110, 360),
+        ],
+        [Specialty("pediatria piso 6", "Pediatria", "Piso 6")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_secciones_repetidas.jpg",
+        [],
+    )
+
+    assert [record.full_name for record in records] == [
+        "Maria Perez",
+        "Luis Gomez",
+        "Ana Rivera",
+        "Carla Medina",
+        "Rosa Torres",
+        "Luis Gomez",
+        "Ana Rivera",
+        "Rosa Torres",
+        "Elena Vargas",
+    ]
+    assert [record.age for record in records] == [
+        8,
+        9,
+        10,
+        11,
+        12,
+        9,
+        10,
+        12,
+        13,
+    ]
+
+
 def test_free_list_extracts_document_and_fuzzy_place() -> None:
     records = parse_ocr_lines(
         [
@@ -37,6 +83,27 @@ def test_free_list_extracts_document_and_fuzzy_place() -> None:
     assert records[0].specialty == "Pediatría"
     assert records[0].document_confidence > 0.8
     assert records[0].origin_confidence > 0.8
+
+
+def test_free_list_extracts_comma_document_and_multiple_origins() -> None:
+    records = parse_ocr_lines(
+        [
+            line("Pediatria", 20),
+            line("Maria Perez 10,711,859 60 anos F Caribe - La Guaira", 100),
+        ],
+        [Specialty("pediatria", "Pediatria", "")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_procedencias_multiples.jpg",
+        [
+            Place("caribe", "Caribe"),
+            Place("la guaira", "La Guaira"),
+        ],
+    )
+
+    assert len(records) == 1
+    assert records[0].document_id == "10711859"
+    assert records[0].origin == "Caribe - La Guaira"
 
 
 def test_inline_list_uses_name_plus_any_field_and_keeps_incomplete_rows() -> None:

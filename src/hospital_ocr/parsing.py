@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from hospital_ocr.matching import detect_specialty, match_place
+from hospital_ocr.matching import detect_specialty, match_place, match_places
 from hospital_ocr.models import (
     OcrLine,
     PatientRecord,
@@ -24,7 +24,7 @@ AGE_RE = re.compile(
 )
 DOCUMENT_RE = re.compile(
     r"(?<!\d)(?P<prefix>[VEve])?\s*[-.]?\s*"
-    r"(?P<number>\d(?:[.\-·]?\d){5,8})(?!\d)"
+    r"(?P<number>\d(?:[.,\-·]?\d){5,8})(?!\d)"
 )
 LEADING_INDEX_RE = re.compile(
     r"^\s*(?P<index>\d{1,3})(?:\s*[.):\-]\s*|\s+)"
@@ -490,12 +490,13 @@ def parse_ocr_lines(
             if document_match
             else 0
         )
-        place = match_place(line.text[place_probe_start:], places)
-        if place is None and inline_list:
+        place_matches = match_places(line.text[place_probe_start:], places)
+        if not place_matches and inline_list:
             index_end = index_span[1] if index_span else 0
             comma = line.text.find(",", index_end)
             if comma >= 0:
-                place = match_place(line.text[comma + 1 :], places)
+                place_matches = match_places(line.text[comma + 1 :], places)
+        place = place_matches[0] if place_matches else None
         if age_match:
             age = int(age_match.group("age"))
             age_unit, uncertain_unit = _normalize_age_unit(age_match.group("unit"))
@@ -521,7 +522,7 @@ def parse_ocr_lines(
                 not _looks_like_missing_age_candidate(line.text)
                 and not (
                     inline_list
-                    and (document_match or place or sex_span)
+                    and (document_match or place_matches or sex_span)
                 )
             ):
                 continue
@@ -548,9 +549,9 @@ def parse_ocr_lines(
             name_text = _fallback_name_text(
                 line.text,
                 excluded,
-                place.alias if place else "",
+                " ".join(match.alias for match in place_matches),
             )
-        origin = place.name if place else ""
+        origin = " - ".join(match.name for match in place_matches)
         row_specialty = detect_specialty(line.text, specialties)
         specialty = context.specialty if context else ""
         area = context.area if context else ""
@@ -595,7 +596,8 @@ def parse_ocr_lines(
             else 0.0
         )
         origin_confidence = (
-            line.score * place.score if place
+            line.score * min(match.score for match in place_matches)
+            if place_matches
             else line.score * 0.45 if origin
             else 0.0
         )
@@ -616,7 +618,7 @@ def parse_ocr_lines(
             ),
             "procedencia": (
                 "catálogo geográfico"
-                if place
+                if place_matches
                 else ""
             ),
             "especialidad": (

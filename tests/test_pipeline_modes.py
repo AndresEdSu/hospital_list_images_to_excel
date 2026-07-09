@@ -70,6 +70,22 @@ class FakeOcrEngine:
         ]
 
 
+class CoarseRowsOcrEngine(FakeOcrEngine):
+    def recognize(self, image_path: Path) -> list[OcrLine]:
+        self.global_calls += 1
+        return [
+            OcrLine(
+                f"global {row} {part}",
+                0.9,
+                (20, row * 120 + part * 60 + 10, 180, row * 120 + part * 60 + 25),
+                800,
+                480,
+            )
+            for row in range(4)
+            for part in range(2)
+        ]
+
+
 def _grid() -> TableGrid:
     return TableGrid(
         horizontal=(
@@ -162,6 +178,34 @@ def test_printed_mode_uses_only_global_ocr(tmp_path: Path) -> None:
     assert engine.global_calls == 1
     assert engine.row_calls == 0
     assert audit is None
+
+
+def test_handwritten_mode_keeps_global_ocr_when_rows_are_too_coarse(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "coarse.png"
+    Image.new("RGB", (800, 480), "white").save(image_path)
+    rows = [
+        TextRow((0, index * 120, 800, (index + 1) * 120), 10)
+        for index in range(4)
+    ]
+    monkeypatch.setattr("hospital_ocr.recognition.detect_text_rows", lambda _: rows)
+    engine = CoarseRowsOcrEngine()
+
+    lines, audit = recognize_image(
+        engine,
+        image_path,
+        None,
+        "handwritten",
+        tmp_path / "rows",
+    )
+
+    assert engine.global_calls == 1
+    assert engine.row_calls == 0
+    assert len(lines) == 8
+    assert audit is not None
+    assert audit["refuerzo"]["renglones_demasiado_amplios"] is True
 
 
 def test_grid_refinement_policy_is_more_sensitive_for_handwriting() -> None:

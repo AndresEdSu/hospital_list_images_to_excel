@@ -11,10 +11,19 @@ NAME_WORD_RE = re.compile(
     r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'-]{2,}"
 )
 DOCUMENT_RE = re.compile(
-    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.\-·]?\d){5,10}(?!\d)"
+    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.,\-·]?\d){5,10}(?!\d)"
 )
 TIME_RE = re.compile(
     r"\b\d{1,2}\s*[:.]\s*\d{2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)?",
+    re.IGNORECASE,
+)
+LEADING_ADMIN_NAME_PREFIX_RE = re.compile(
+    r"^\s*"
+    r"(?:cama|camilla|cam|hab(?:itacion)?|habitacion|cubiculo|box|silla)"
+    r"\b"
+    r"(?:\s*(?:n(?:ro|o)?|num(?:ero)?)\.?)?"
+    r"(?:[^A-Za-z0-9]+[A-Za-z]?\d{1,3}[A-Za-z]?|\s+[A-Za-z]?\d{1,3}[A-Za-z]?)?"
+    r"[^A-Za-z0-9]*",
     re.IGNORECASE,
 )
 DATE_RE = re.compile(r"\b\d{1,2}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{2,4}\b")
@@ -53,14 +62,23 @@ HEADER_WORDS = {
     "afiliacion",
     "diagnostico",
     "historia",
+    "numero",
 }
 HEADER_ALIASES = {
     "name": (
         "nombre y apellido",
+        "nombres y apellidos",
+        "nombre apellido",
         "apellidos y nombres",
         "nombre completo",
         "paciente",
+    ),
+    "given_names": (
+        "nombres",
         "nombre",
+    ),
+    "surnames": (
+        "apellidos",
         "apellido",
     ),
     "document": (
@@ -71,7 +89,7 @@ HEADER_ALIASES = {
         "c i",
         "ci",
     ),
-    "age": ("edad", "anos", "ano"),
+    "age": ("edad", "unidad"),
     "sex": ("sexo", "genero"),
     "origin": (
         "lugar de procedencia",
@@ -95,10 +113,23 @@ HEADER_ALIASES = {
 }
 NON_NAME_WORDS = {
     "am",
+    "ano",
+    "anos",
     "pm",
     "pn",
     "ci",
     "cama",
+    "camilla",
+    "cam",
+    "hab",
+    "habitacion",
+    "cubiculo",
+    "box",
+    "silla",
+    "an",
+    "ban",
+    "dato",
+    "datos",
     "sala",
     "edad",
     "sexo",
@@ -108,6 +139,8 @@ NON_NAME_WORDS = {
     "nombre",
     "apellido",
     "nocturno",
+    "numero",
+    "sin",
 }
 
 
@@ -153,11 +186,16 @@ def remove_semantic_age_tokens(text: str) -> str:
     return "".join(characters)
 
 
-def name_from_text(text: str) -> str:
+def name_from_text(
+    text: str,
+    *,
+    allow_short_single: bool = False,
+) -> str:
     cleaned = DATE_RE.sub(" ", text)
     cleaned = TIME_RE.sub(" ", cleaned)
     cleaned = DOCUMENT_RE.sub(" ", cleaned)
     cleaned = remove_semantic_age_tokens(cleaned)
+    cleaned = LEADING_ADMIN_NAME_PREFIX_RE.sub(" ", cleaned)
     cleaned = re.sub(r"^\s*\d{1,3}\s*[.):\-]?\s*", " ", cleaned)
     cleaned = re.sub(r"\b(?:a|p)\s*\.?\s*m\.?\b", " ", cleaned, flags=re.I)
     words = [
@@ -167,7 +205,7 @@ def name_from_text(text: str) -> str:
     ]
     if not 1 <= len(words) <= 6:
         return ""
-    if len(words) == 1 and len(words[0]) < 6:
+    if len(words) == 1 and len(words[0]) < 6 and not allow_short_single:
         return ""
     return clean_display_text(" ".join(words))
 

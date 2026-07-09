@@ -1,4 +1,4 @@
-from hospital_ocr.matching import match_place
+from hospital_ocr.matching import match_place, match_places
 from hospital_ocr.models import Place, Specialty
 from hospital_ocr.parsing import detect_specialty, parse_ocr_lines
 from tests.parsing_helpers import LEXICONS, line, table_line
@@ -83,6 +83,31 @@ def test_place_match_tolerates_ocr_space_changes_and_prefers_specific_alias() ->
     assert short is not None and short.name == "Catia"
 
 
+def test_place_matches_extracts_multiple_catalog_origins() -> None:
+    places = [
+        Place("caribe", "Caribe"),
+        Place("la guaira", "La Guaira"),
+        Place("caraballeda", "Caraballeda"),
+    ]
+
+    hyphen_matches = match_places("Caribe - La Guaira", places)
+    comma_matches = match_places("Caribe, Caraballeda", places)
+    adjacent_matches = match_places("Caraballeda Caribe", places)
+
+    assert [match.name for match in hyphen_matches] == [
+        "Caribe",
+        "La Guaira",
+    ]
+    assert [match.name for match in comma_matches] == [
+        "Caribe",
+        "Caraballeda",
+    ]
+    assert [match.name for match in adjacent_matches] == [
+        "Caraballeda",
+        "Caribe",
+    ]
+
+
 def test_contextual_place_match_requires_a_clear_catalog_winner() -> None:
     places = [
         Place("guaira", "La Guaira"),
@@ -103,6 +128,22 @@ def test_contextual_place_match_requires_a_clear_catalog_winner() -> None:
         contextual=True,
     )
     assert ambiguous is None
+
+
+def test_place_match_accepts_institutional_origin_aliases() -> None:
+    places = [
+        Place("estado suere", "Estado Sucre"),
+        Place("hospital periferico de pariata", "Hospital Periferico de Pariata"),
+        Place("hosp periferico pariatra", "Hospital Periferico de Pariata"),
+    ]
+
+    state = match_place("Estado Suere (Cl)", places, contextual=True)
+    hospital = match_place("Hosp. Periferico pariatra", places, contextual=True)
+
+    assert state is not None
+    assert state.name == "Estado Sucre"
+    assert hospital is not None
+    assert hospital.name == "Hospital Periferico de Pariata"
 
 
 def test_specialty_match_tolerates_removed_space() -> None:

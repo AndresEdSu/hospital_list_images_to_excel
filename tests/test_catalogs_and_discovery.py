@@ -6,6 +6,7 @@ from hospital_ocr.discovery import (
     find_unmapped_images,
     select_evenly,
 )
+from hospital_ocr.matching import match_place
 
 
 def test_center_folder_determines_center(tmp_path: Path) -> None:
@@ -54,6 +55,18 @@ def test_place_catalog_normalizes_aliases(tmp_path: Path) -> None:
         ("la guaira", "La Guaira"),
         ("petare", "Petare"),
     ]
+
+
+def test_project_place_catalog_includes_states_and_health_centers() -> None:
+    places = load_places(Path("config/lugares.csv"))
+
+    state = match_place("Edo. Tachira", places, contextual=True)
+    center = match_place("Hospital Miguel Perez Carreno", places, contextual=True)
+
+    assert state is not None
+    assert state.name == "Tachira"
+    assert center is not None
+    assert center.name == "Hospital Dr. Miguel Perez Carreno"
 
 
 def test_pilot_selection_includes_first_and_last(tmp_path: Path) -> None:

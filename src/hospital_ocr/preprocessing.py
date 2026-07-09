@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from math import degrees
 from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps
@@ -119,6 +120,83 @@ def _normalize_shadows(image: Image.Image) -> Image.Image:
     return Image.fromarray(blended)
 
 
+def _estimate_horizontal_skew(image: Image.Image) -> float | None:
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+
+    rgb = np.asarray(image)
+    height, width = rgb.shape[:2]
+    if width < 200 or height < 200:
+        return None
+
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    binary = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        12,
+    )
+    horizontal_mask = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (max(20, width // 35), 1),
+        ),
+    )
+    detected = cv2.HoughLinesP(
+        horizontal_mask,
+        1,
+        np.pi / 720,
+        threshold=max(25, width // 18),
+        minLineLength=max(30, int(width * 0.16)),
+        maxLineGap=max(8, int(width * 0.035)),
+    )
+    if detected is None:
+        return None
+
+    angles: list[float] = []
+    for line in detected:
+        x1, y1, x2, y2 = (int(value) for value in line[0])
+        dx = x2 - x1
+        dy = y2 - y1
+        if abs(dx) < 1:
+            continue
+        angle = degrees(np.arctan2(dy, dx))
+        if abs(angle) <= 15:
+            angles.append(float(angle))
+    if len(angles) < 4:
+        return None
+
+    values = np.asarray(angles)
+    q25, q75 = np.percentile(values, [25, 75])
+    if q75 - q25 > 5.0:
+        return None
+    return float(np.median(values))
+
+
+def _deskew_horizontal_lines(
+    image: Image.Image,
+    *,
+    minimum_angle: float = 3.0,
+    maximum_angle: float = 12.0,
+) -> Image.Image:
+    angle = _estimate_horizontal_skew(image)
+    if angle is None or not minimum_angle <= abs(angle) <= maximum_angle:
+        return image
+    return image.rotate(
+        angle,
+        resample=Image.Resampling.BICUBIC,
+        expand=True,
+        fillcolor=(255, 255, 255),
+    )
+
+
 def preprocess_image(
     source: Path,
     destination: Path,
@@ -137,6 +215,7 @@ def preprocess_image(
                 max(1, round(image.height * scale)),
             )
             image = image.resize(target, Image.Resampling.LANCZOS)
+        image = _deskew_horizontal_lines(image)
         image = ImageOps.autocontrast(image, cutoff=1)
         image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=3))
         image.save(destination, format="JPEG", quality=95, optimize=True)

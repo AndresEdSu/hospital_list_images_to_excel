@@ -186,6 +186,8 @@ def headerless_field_lines(
 
 def extract_semantic_age(
     lines: list[OcrLine],
+    *,
+    allow_trailing_name_age: bool = False,
 ) -> tuple[int | None, str]:
     candidates: list[tuple[int, float, int, str]] = []
     for line in lines:
@@ -210,11 +212,23 @@ def extract_semantic_age(
             normalized,
         )
         if match is None:
-            continue
-        age = int(match.group("age"))
+            if not allow_trailing_name_age:
+                continue
+            trailing = re.search(r"(?<!\d)(?P<age>\d{1,3})\s*$", normalized)
+            if trailing is None:
+                continue
+            prefix = normalized[: trailing.start()]
+            if len(name_from_text(prefix).split()) < 2:
+                continue
+            age = int(trailing.group("age"))
+            unit = ""
+            priority = 1
+        else:
+            age = int(match.group("age"))
+            unit = match.group("unit") or ""
+            priority = int(bool(unit))
         if not 0 <= age <= 115:
             continue
-        unit = match.group("unit") or ""
         normalized_unit = (
             "meses"
             if unit.startswith("mes")
@@ -222,7 +236,7 @@ def extract_semantic_age(
             if unit.startswith("dia")
             else "años"
         )
-        candidates.append((int(bool(unit)), line.score, age, normalized_unit))
+        candidates.append((priority, line.score, age, normalized_unit))
     if not candidates:
         return None, ""
     candidates.sort(reverse=True)
