@@ -15,6 +15,41 @@ def test_short_name_list_is_not_assumed_to_be_table() -> None:
     assert looks_like_table(lines) is False
 
 
+def test_headerless_table_keeps_shifted_rows_from_repeated_sections() -> None:
+    records = parse_ocr_lines(
+        [
+            table_line("Pediatria Piso 6", 20, 20, 300),
+            table_line("Maria Perez 8", 90, 40, 260),
+            table_line("Luis Gomez 9", 140, 40, 260),
+            table_line("Ana Rivera 10", 190, 40, 275),
+            table_line("Carla Medina 11", 240, 40, 290),
+            table_line("Rosa Torres 12", 290, 40, 280),
+            table_line("Pediatria Piso 6", 370, 90, 350),
+            table_line("Luis Gomez 9", 440, 110, 330),
+            table_line("Ana Rivera 10", 490, 110, 345),
+            table_line("Rosa Torres 12", 540, 110, 350),
+            table_line("Elena Vargas 13", 590, 110, 360),
+        ],
+        [Specialty("pediatria piso 6", "Pediatria", "Piso 6")],
+        LEXICONS,
+        "Hospital de Prueba",
+        "lista_secciones_repetidas.jpg",
+        [],
+    )
+
+    assert [record.full_name for record in records] == [
+        "Maria Perez",
+        "Luis Gomez",
+        "Ana Rivera",
+        "Carla Medina",
+        "Rosa Torres",
+        "Luis Gomez",
+        "Ana Rivera",
+        "Rosa Torres",
+        "Elena Vargas",
+    ]
+
+
 def test_free_list_extracts_document_and_fuzzy_place() -> None:
     records = parse_ocr_lines(
         [

@@ -42,6 +42,7 @@ from hospital_ocr.table_extraction.rows import (
     row_index_lines as _row_index_lines,
 )
 from hospital_ocr.table_extraction.sections import (
+    SectionHeading,
     find_section_headings as _find_section_headings,
     section_for_line as _section_for_line,
 )
@@ -165,6 +166,54 @@ def _has_surname_hint(text: str, lexicons: NameLexicons) -> bool:
     )
 
 
+def _headerless_section_groups(
+    lines: list[OcrLine],
+    section_headings: list[SectionHeading],
+) -> list[list[OcrLine]]:
+    if len(section_headings) < 2:
+        return [lines]
+
+    groups: list[list[OcrLine]] = []
+    unsectioned = [
+        line for line in lines if _section_for_line(line, section_headings) is None
+    ]
+    if unsectioned:
+        groups.append(unsectioned)
+
+    for section in sorted(
+        section_headings,
+        key=lambda item: item.line.center_y,
+    ):
+        section_lines = [
+            line
+            for line in lines
+            if _section_for_line(line, section_headings) is section
+        ]
+        if section_lines:
+            groups.append(section_lines)
+
+    return groups or [lines]
+
+
+def _headerless_section_anchors(
+    lines: list[OcrLine],
+    section_headings: list[SectionHeading],
+    grid: TableGrid | None,
+    places: list[Place],
+) -> list[RowAnchor]:
+    groups = _headerless_section_groups(lines, section_headings)
+    if len(groups) <= 1:
+        return _find_row_anchors(lines, None, grid, places)
+
+    anchors: list[RowAnchor] = []
+    for group in groups:
+        anchors.extend(_find_row_anchors(group, None, grid, places))
+
+    if len(anchors) < 2:
+        return _find_row_anchors(lines, None, grid, places)
+    return sorted(anchors, key=lambda item: item.line.center_y)
+
+
 def parse_table_lines(
     lines: list[OcrLine],
     name_lexicons: NameLexicons,
@@ -209,7 +258,16 @@ def parse_table_lines(
     record_lines = [
         line for line in data_lines if id(line) not in section_line_ids
     ]
-    anchors = _find_row_anchors(record_lines, schema, grid, places)
+    anchors = (
+        _headerless_section_anchors(
+            record_lines,
+            section_headings,
+            grid,
+            places,
+        )
+        if schema is None
+        else _find_row_anchors(record_lines, schema, grid, places)
+    )
     if len(anchors) < 2:
         return []
 
