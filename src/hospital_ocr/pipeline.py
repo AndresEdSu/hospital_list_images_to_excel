@@ -151,7 +151,7 @@ def process_images(
     )
     write_processing_diagnostics(config.interim_dir, errors, timings)
 
-    consolidation = consolidate_records(extracted)
+    consolidation = consolidate_records(extracted, name_lexicons=name_lexicons)
     consolidated = consolidation.patients
     result = ProcessingResult(
         consolidation=consolidation,
