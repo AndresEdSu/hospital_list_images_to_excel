@@ -1,4 +1,4 @@
-# Hospital List Images to Excel
+# Hospital OCR
 
 Herramienta local para convertir imágenes de listas hospitalarias en un archivo Excel revisable. El proyecto usa OCR, reglas de interpretación y catálogos configurables para extraer pacientes, cédulas, edades, procedencias, especialidades y posibles duplicados.
 
