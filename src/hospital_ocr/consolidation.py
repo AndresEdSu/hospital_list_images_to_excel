@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 from hospital_ocr.models import (
@@ -8,11 +9,119 @@ from hospital_ocr.models import (
     EvidenceRecord,
     PatientRecord,
 )
+from hospital_ocr.name_splitter import NameLexicons, normalize_identity_text
 from hospital_ocr.text import normalize_text
+
+
+NAME_DUPLICATE_THRESHOLD = 0.92
+NAME_CANONICAL_TOKEN_THRESHOLD = 0.90
+NAME_CANONICAL_SHORT_TOKEN_THRESHOLD = 0.94
+NAME_CANONICAL_MIN_MARGIN = 0.03
+
+
+@dataclass(frozen=True)
+class _NameKey:
+    normalized: str
+    canonical: str
+
+    @property
+    def was_canonicalized(self) -> bool:
+        return self.normalized != self.canonical
 
 
 def _normalized_document(value: str) -> str:
     return "".join(character for character in value if character.isdigit())
+
+
+def _name_terms(lexicons: NameLexicons) -> dict[str, float]:
+    terms: dict[str, float] = {}
+    for catalog in (lexicons.given_names, lexicons.surnames):
+        for term, weight in catalog.items():
+            normalized = normalize_text(term)
+            if normalized:
+                terms[normalized] = max(terms.get(normalized, 0.0), weight)
+    return terms
+
+
+def _name_ocr_variants(token: str) -> set[str]:
+    variants = {token}
+    replacements = (
+        ("0", "o"),
+        ("1", "i"),
+        ("w", "u"),
+        ("u", "v"),
+        ("v", "u"),
+    )
+    for old, new in replacements:
+        if old in token:
+            variants.add(token.replace(old, new))
+    if token.startswith("i") and len(token) >= 4:
+        variants.add("j" + token[1:])
+    if token.startswith("j") and len(token) >= 4:
+        variants.add("i" + token[1:])
+    return variants
+
+
+def _canonical_name_token(token: str, terms: dict[str, float]) -> str:
+    if token in terms or len(token) < 4:
+        return token
+
+    best_term = token
+    best_score = 0.0
+    second_score = 0.0
+    variants = _name_ocr_variants(token)
+    for term, weight in terms.items():
+        if len(term) < 4 or abs(len(term) - len(token)) > 2:
+            continue
+        term_best = max(
+            SequenceMatcher(None, variant, term).ratio()
+            for variant in variants
+        ) * max(0.75, min(weight, 1.0))
+        if term_best > best_score:
+            second_score = best_score
+            best_score = term_best
+            best_term = term
+        elif term_best > second_score:
+            second_score = term_best
+
+    threshold = (
+        NAME_CANONICAL_SHORT_TOKEN_THRESHOLD
+        if len(token) <= 5
+        else NAME_CANONICAL_TOKEN_THRESHOLD
+    )
+    if (
+        best_score >= threshold
+        and best_score - second_score >= NAME_CANONICAL_MIN_MARGIN
+    ):
+        return best_term
+    return token
+
+
+def _name_key(
+    full_name: str,
+    lexicons: NameLexicons | None,
+    terms: dict[str, float] | None,
+    cache: dict[str, _NameKey],
+) -> _NameKey:
+    normalized = normalize_text(full_name)
+    cached = cache.get(normalized)
+    if cached is not None:
+        return cached
+    if not normalized or lexicons is None or terms is None:
+        key = _NameKey(normalized=normalized, canonical=normalized)
+        cache[normalized] = key
+        return key
+
+    segmented = normalize_text(
+        normalize_identity_text(full_name, lexicons, role="mixed")
+    )
+    canonical = " ".join(
+        _canonical_name_token(token, terms)
+        for token in segmented.split()
+    )
+    key = _NameKey(normalized=normalized, canonical=canonical)
+    cache[normalized] = key
+    return key
 
 
 def _compatible_identity(left: PatientRecord, right: PatientRecord) -> bool:
@@ -40,7 +149,12 @@ def _compatible_identity(left: PatientRecord, right: PatientRecord) -> bool:
 
 
 def _possible_duplicate(
-    left: PatientRecord, right: PatientRecord
+    left: PatientRecord,
+    right: PatientRecord,
+    *,
+    name_lexicons: NameLexicons | None = None,
+    name_terms: dict[str, float] | None = None,
+    name_cache: dict[str, _NameKey] | None = None,
 ) -> tuple[float, str] | None:
     if left.center != right.center:
         return None
@@ -48,22 +162,51 @@ def _possible_duplicate(
     right_document = _normalized_document(right.document_id)
     if left_document and right_document and left_document != right_document:
         return None
-    left_name = normalize_text(left.full_name)
-    right_name = normalize_text(right.full_name)
-    if min(len(left_name), len(right_name)) < 8:
+
+    if name_cache is None:
+        name_cache = {}
+    left_key = _name_key(
+        left.full_name,
+        name_lexicons,
+        name_terms,
+        name_cache,
+    )
+    right_key = _name_key(
+        right.full_name,
+        name_lexicons,
+        name_terms,
+        name_cache,
+    )
+    left_name = left_key.normalized
+    right_name = right_key.normalized
+    left_canonical = left_key.canonical
+    right_canonical = right_key.canonical
+    if min(len(left_canonical), len(right_canonical)) < 8:
         return None
-    name_similarity = SequenceMatcher(None, left_name, right_name).ratio()
-    exact_name = left_name == right_name
+
+    raw_similarity = SequenceMatcher(None, left_name, right_name).ratio()
+    canonical_similarity = SequenceMatcher(
+        None,
+        left_canonical,
+        right_canonical,
+    ).ratio()
+    canonical_helped = (
+        (left_key.was_canonicalized or right_key.was_canonicalized)
+        and canonical_similarity > raw_similarity
+    )
+    name_similarity = max(raw_similarity, canonical_similarity)
+    exact_name = left_name == right_name or left_canonical == right_canonical
     if left.age is None or right.age is None:
-        if exact_name:
-            return name_similarity, "mismo nombre | edad incompleta"
+        if left_name == right_name:
+            return raw_similarity, "mismo nombre | edad incompleta"
         return None
     if left.age_unit != right.age_unit or left.age != right.age:
         return None
-    if not exact_name and name_similarity < 0.92:
+    if not exact_name and name_similarity < NAME_DUPLICATE_THRESHOLD:
         return None
 
-    reasons = [f"nombre {name_similarity:.0%}", "misma edad"]
+    name_reason = "nombre normalizado" if canonical_helped else "nombre"
+    reasons = [f"{name_reason} {name_similarity:.0%}", "misma edad"]
     if left.sex and right.sex and left.sex != right.sex:
         reasons.append("sexo diferente")
     if (
@@ -183,10 +326,21 @@ def _merge_record(target: PatientRecord, incoming: PatientRecord) -> None:
     _remove_resolved_notes(target)
 
 
-def _mark_possible_duplicates(records: list[PatientRecord]) -> None:
+def _mark_possible_duplicates(
+    records: list[PatientRecord],
+    name_lexicons: NameLexicons | None = None,
+) -> None:
+    name_terms = _name_terms(name_lexicons) if name_lexicons is not None else None
+    name_cache: dict[str, _NameKey] = {}
     for index, left in enumerate(records):
         for right in records[index + 1 :]:
-            candidate = _possible_duplicate(left, right)
+            candidate = _possible_duplicate(
+                left,
+                right,
+                name_lexicons=name_lexicons,
+                name_terms=name_terms,
+                name_cache=name_cache,
+            )
             if candidate:
                 _, reason = candidate
                 left.needs_review = True
@@ -203,7 +357,10 @@ def _mark_possible_duplicates(records: list[PatientRecord]) -> None:
                 )
 
 
-def consolidate_records(records: list[PatientRecord]) -> ConsolidationResult:
+def consolidate_records(
+    records: list[PatientRecord],
+    name_lexicons: NameLexicons | None = None,
+) -> ConsolidationResult:
     consolidated: list[PatientRecord] = []
     evidence_links: list[tuple[int, PatientRecord, PatientRecord]] = []
     first_occurrence: dict[int, int] = {}
@@ -257,7 +414,7 @@ def consolidate_records(records: list[PatientRecord]) -> ConsolidationResult:
                 f"{record.occurrences} apariciones consolidadas "
                 f"en {image_count} imagen(es)"
             )
-    _mark_possible_duplicates(consolidated)
+    _mark_possible_duplicates(consolidated, name_lexicons)
 
     evidence = [
         EvidenceRecord(
