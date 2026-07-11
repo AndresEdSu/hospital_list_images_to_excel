@@ -86,6 +86,53 @@ class CoarseRowsOcrEngine(FakeOcrEngine):
         ]
 
 
+class RowPolicyOcrEngine(FakeOcrEngine):
+    def __init__(
+        self,
+        *,
+        global_text: str,
+        global_score: float,
+        refined_text: str,
+        refined_score: float,
+    ) -> None:
+        super().__init__()
+        self.global_text = global_text
+        self.global_score = global_score
+        self.refined_text = refined_text
+        self.refined_score = refined_score
+
+    def recognize(self, image_path: Path) -> list[OcrLine]:
+        self.global_calls += 1
+        return [
+            OcrLine(
+                f"{self.global_text} {index}",
+                self.global_score,
+                (20, index * 80 + 35, 300, index * 80 + 55),
+                500,
+                360,
+            )
+            for index in range(4)
+        ]
+
+    def recognize_rows(
+        self,
+        image_path: Path,
+        rows: list[TextRow],
+        artifacts_dir: Path,
+    ) -> list[OcrLine]:
+        self.row_calls += 1
+        return [
+            OcrLine(
+                f"{self.refined_text} {index}",
+                self.refined_score,
+                (30, round(row.center_y) - 5, 330, round(row.center_y) + 5),
+                500,
+                360,
+            )
+            for index, row in enumerate(rows)
+        ]
+
+
 def _grid() -> TableGrid:
     return TableGrid(
         horizontal=(
@@ -206,6 +253,86 @@ def test_handwritten_mode_keeps_global_ocr_when_rows_are_too_coarse(
     assert len(lines) == 8
     assert audit is not None
     assert audit["refuerzo"]["renglones_demasiado_amplios"] is True
+
+
+def test_handwritten_mode_discards_row_refinement_when_quality_drops(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "low_quality_refinement.png"
+    Image.new("RGB", (500, 360), "white").save(image_path)
+    rows = [
+        TextRow((0, index * 80, 500, (index + 1) * 80), 10)
+        for index in range(4)
+    ]
+    monkeypatch.setattr("hospital_ocr.recognition.detect_text_rows", lambda _: rows)
+    engine = RowPolicyOcrEngine(
+        global_text="Maria Perez",
+        global_score=0.95,
+        refined_text="@@@",
+        refined_score=0.20,
+    )
+
+    lines, audit = recognize_image(
+        engine,
+        image_path,
+        None,
+        "handwritten",
+        tmp_path / "rows",
+    )
+
+    assert engine.global_calls == 1
+    assert engine.row_calls == 1
+    assert [line.text for line in lines] == [
+        "Maria Perez 0",
+        "Maria Perez 1",
+        "Maria Perez 2",
+        "Maria Perez 3",
+    ]
+    assert audit is not None
+    assert audit["motivo_respaldo"]
+    assert audit["refuerzo"]["decision"]["aceptado"] is False
+    assert audit["refuerzo"]["decision"]["motivo"] == "calidad_no_mejora"
+
+
+def test_handwritten_mode_accepts_row_refinement_when_quality_improves(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "high_quality_refinement.png"
+    Image.new("RGB", (500, 360), "white").save(image_path)
+    rows = [
+        TextRow((0, index * 80, 500, (index + 1) * 80), 10)
+        for index in range(4)
+    ]
+    monkeypatch.setattr("hospital_ocr.recognition.detect_text_rows", lambda _: rows)
+    engine = RowPolicyOcrEngine(
+        global_text="??",
+        global_score=0.45,
+        refined_text="Maria Perez 12345678",
+        refined_score=0.95,
+    )
+
+    lines, audit = recognize_image(
+        engine,
+        image_path,
+        None,
+        "handwritten",
+        tmp_path / "rows",
+    )
+
+    assert engine.global_calls == 1
+    assert engine.row_calls == 1
+    assert [line.text for line in lines] == [
+        "Maria Perez 12345678 0",
+        "Maria Perez 12345678 1",
+        "Maria Perez 12345678 2",
+        "Maria Perez 12345678 3",
+    ]
+    assert audit is not None
+    assert audit["motivo_respaldo"] == ""
+    assert audit["refuerzo"]["decision"]["aceptado"] is True
+    assert audit["refuerzo"]["decision"]["margen_calidad"] > 0
 
 
 def test_grid_refinement_policy_is_more_sensitive_for_handwriting() -> None:
