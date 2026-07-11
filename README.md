@@ -1,221 +1,267 @@
 # Hospital List Images to Excel
 
-Pipeline local para transformar imágenes de listas hospitalarias en archivos Excel.
+Herramienta local para convertir imagenes de listas hospitalarias en un archivo Excel revisable. El proyecto usa OCR, reglas de interpretacion y catalogos configurables para extraer pacientes, cedulas, edades, procedencias, especialidades y posibles duplicados.
 
-## Estructura
+El procesamiento esta pensado para ejecutarse en la computadora del usuario. Las imagenes, resultados intermedios, cache y archivos Excel generados no se guardan en Git.
 
-- `src/hospital_ocr/`: código fuente del pipeline OCR.
-- `src/hospital_ocr/table_extraction/`: detección de tablas, esquemas,
-  agrupación de filas, extracción de campos y ensamblaje de registros.
-- `tests/`: pruebas automatizadas.
-- `config/centros.csv`: relación entre carpetas y nombres oficiales de centros.
-- `config/lugares.csv`: equivalencias configurables de ciudades, sectores y localidades.
-- `config/especialidades.csv`: equivalencias para normalizar especialidades y áreas.
-- `config/nombres_comunes.csv`: catálogo configurable de nombres frecuentes.
-- `config/apellidos_comunes.csv`: catálogo configurable de apellidos frecuentes.
-- `data/input/images/`: imágenes originales, clasificadas en una subcarpeta por centro; su contenido no se guarda en Git.
-- `data/evaluation/`: corpus privado de imágenes reales y resultados esperados para medir precisión; su contenido no se guarda en Git.
-- `data/interim/`: imágenes preprocesadas, resultados OCR y cuadrículas detectadas para auditoría.
-- `data/output/`: archivos Excel finales.
+## Que Hace
 
-Cada subcarpeta de imágenes se relaciona con el nombre oficial del centro mediante `config/centros.csv`.
+- Procesa una o varias imagenes de listas hospitalarias.
+- Detecta tablas, filas, columnas y listas escritas en formato libre.
+- Extrae nombre completo, nombre, apellido, cedula, edad, sexo, procedencia, especialidad, area y observaciones.
+- Consolida apariciones repetidas de un mismo paciente dentro de un centro.
+- Marca posibles duplicados sin fusionarlos automaticamente.
+- Genera un Excel con hojas `Pacientes`, `Plantilla` y `Diccionario`.
+- Permite revisar y corregir los datos antes de descargar el Excel desde la interfaz web.
 
-El catálogo parte de 46 hospitales y centros de referencia de todos los estados.
-Se tomó como base la lista de hospitales y centros centinela reproducida en el
-[Plan intersectorial de preparación y atención a la COVID-19 de Naciones Unidas
-en Venezuela](https://venezuela.un.org/es/download/48785/88968), páginas 31 a
-33. A esa base se incorporan centros adicionales identificados para el proyecto,
-por lo que el total puede ser mayor. Es una lista operativa nacional, no un
-ranking de calidad ni un directorio exhaustivo, y la propia fuente indica que
-está sujeta a actualización.
+## Requisitos
 
-## Preparación
+- Windows, macOS o Linux.
+- Python `>=3.11,<3.12`.
+- Un entorno con las dependencias del proyecto instaladas.
+- Conexion a internet solo para instalar dependencias y descargar los modelos OCR la primera vez.
+
+El OCR se ejecuta localmente. La primera corrida puede tardar porque PaddleOCR descarga modelos en `.cache/paddlex`. Las siguientes corridas son mas rapidas gracias a la cache OCR.
+
+## Instalacion
+
+Con Conda:
+
+```powershell
+conda create -n hospital-ocr python=3.11
+conda activate hospital-ocr
+python -m pip install -e .
+```
+
+Si ya tienes un entorno preparado con las dependencias pesadas instaladas:
 
 ```powershell
 conda activate hospital-ocr
 python -m pip install -e . --no-deps
 ```
 
-PaddleOCR descarga sus modelos oficiales durante la primera ejecución. El procesamiento posterior se realiza localmente.
+Para instalar tambien dependencias de pruebas:
 
-## Uso
+```powershell
+python -m pip install -e ".[dev]"
+```
 
-### Interfaz web local
+## Uso Rapido
+
+### Interfaz Web
 
 ```powershell
 conda activate hospital-ocr
 hospital-ocr-web
 ```
 
-La aplicación abre una página local en el navegador. Permite seleccionar el centro, cargar varias imágenes, seguir el progreso por etapa e imagen, revisar y corregir pacientes, comparar con las imágenes y descargar el Excel. No expone el servidor fuera de `127.0.0.1` y limita cada archivo a 15 MB.
+La aplicacion abre Streamlit en `127.0.0.1`. Desde ahi puedes:
 
-Las imágenes seleccionadas en Streamlit pueden estar en cualquier carpeta de
-la computadora. La aplicación las copia a una sesión temporal y les asigna el
-centro escogido; el nombre de su carpeta original no tiene ningún efecto.
-El Excel conserva el orden de carga y el orden visual de arriba hacia abajo
-dentro de cada imagen. Si varias apariciones se consolidan, el paciente mantiene
-la posición de la primera.
+- Elegir el centro hospitalario.
+- Cargar varias imagenes.
+- Seleccionar el tipo de texto: `Automatico`, `Manuscrito` o `Impreso`.
+- Ejecutar el OCR.
+- Revisar pacientes, pendientes y posibles duplicados.
+- Comparar con la imagen original.
+- Descargar `pacientes.xlsx`.
 
-Si el centro no aparece en el catálogo, seleccione `Otro centro de salud` y
-escriba su nombre oficial. Este valor se utiliza en el Excel de esa sesión, pero
-no se agrega automáticamente a `config/centros.csv`, para evitar duplicados y
-errores ortográficos en la lista compartida.
+Si el centro no aparece en el catalogo, selecciona `Otro centro de salud` y escribe su nombre oficial. Ese valor se usa solo en la sesion actual.
 
-Los archivos temporales se guardan en `data/interim/web_sessions/`. Pueden eliminarse desde la interfaz y las sesiones con más de 24 horas se limpian automáticamente.
+Hay una imagen ficticia para preparar capturas y probar la app sin datos reales:
 
-### Evaluación con imágenes reales
+![Lista hospitalaria ficticia](docs/examples/fake_hospital_list.png)
 
-El corpus privado se guarda en `data/evaluation/test_images/`. Cada imagen debe
-tener un CSV homónimo, codificado como UTF-8 y separado por punto y coma. Para
-validar únicamente su estructura:
+Puedes cargar `docs/examples/fake_hospital_list.png`, seleccionar `Otro centro de salud` y usar `Hospital Demo San Gabriel` como nombre del centro.
 
-```powershell
-python -m hospital_ocr.evaluation data/evaluation/test_images --validate-only
+Vista de la interfaz web luego de procesar la imagen de ejemplo:
+
+![Interfaz web con revision de pacientes](docs/examples/fake_app.png)
+
+### Linea de Comandos
+
+La linea de comandos espera imagenes organizadas por centro:
+
+```text
+data/input/images/
+  hospital_domingo_luciani/
+    lista_01.jpg
+    lista_02.jpg
+  hospital_miguel_perez_carreno/
+    lista_03.jpg
 ```
 
-Para ejecutar una línea base completa con el modo automático:
+Cada carpeta debe coincidir con un valor de la columna `carpeta` en `config/centros.csv`.
 
-```powershell
-python -m hospital_ocr.evaluation data/evaluation/test_images --ocr-mode auto
-```
-
-Los resultados se escriben en `data/evaluation/test_images/results/`: resumen
-JSON, métricas por imagen y campo, diferencias, predicciones y artefactos OCR.
-Este contenido puede incluir datos sensibles y permanece excluido de Git.
-Las métricas pueden recalcularse posteriormente sin repetir el OCR mediante
-`--from-predictions`.
-
-### Línea de comandos
-
-La organización por subcarpetas solo es obligatoria en este modo. Cada carpeta
-dentro de `data/input/images/` debe usar exactamente un identificador de la
-columna `carpeta` de `config/centros.csv`. Las imágenes sueltas o ubicadas en
-carpetas desconocidas se omiten y se reportan como errores.
-
-Piloto distribuido de cinco imágenes:
-
-```powershell
-hospital-ocr --limit 5 --output data/output/piloto_pacientes.xlsx
-```
-
-Si el archivo ya existe, el comando se detiene para proteger correcciones manuales. Solo debe reemplazarse de forma intencional:
-
-```powershell
-hospital-ocr --limit 5 --output data/output/piloto_pacientes.xlsx --force
-```
-
-Todas las imágenes:
+Procesar todas las imagenes:
 
 ```powershell
 hospital-ocr
 ```
 
-El Excel contiene:
+Procesar una muestra distribuida de 5 imagenes:
 
-- `Plantilla`: columnas `nombre`, `apellido`, `cedula`, `centro` y `edad_sector`.
-- `Pacientes`: una fila consolidada por paciente, con nombre completo, separación confiable de nombres y apellidos, revisión, duplicados, imágenes de origen y confianza del OCR.
-- `Diccionario`: significado, tipo, valores permitidos y ejemplo de cada columna.
+```powershell
+hospital-ocr --limit 5 --output data/output/piloto_pacientes.xlsx
+```
 
-El pipeline detecta automáticamente las tablas con columnas de nombre, cédula,
-edad, sexo, procedencia, especialidad y plan. Los encabezados se comparan con
-aliases comunes y sus coordenadas se utilizan para inferir los límites y el
-orden real de las columnas. Cuando existen bordes visibles, las líneas
-horizontales y verticales se detectan sobre una copia de la imagen y cada caja
-OCR se asigna por solapamiento a una celda física. Esto permite seguir filas
-inclinadas o afectadas por perspectiva. Sin encabezados, cada fila se clasifica por formato
-y catálogo: patrón documental para cédula, rango y unidad para edad, valores
-cerrados para sexo y aliases para procedencia y especialidad. La columna de
-nombres se aprende por repetición, variedad y alineación, sin asumir una
-posición fija. La detección de la tabla combina regularidad entre filas,
-índices consecutivos y columnas auxiliares; edad, sexo y cédula son señales
-opcionales, no requisitos. En las tablas, `Plan` se conserva dentro de
-`observaciones` y no se interpreta automáticamente como especialidad.
+Reemplazar un Excel existente de forma intencional:
 
-Las listas donde cada fila aparece en una sola caja OCR se distinguen de las
-tablas por su estructura. Una página se considera lista en línea cuando varias
-filas contienen un nombre y al menos otro campo reconocible —edad, cédula,
-sexo, procedencia o especialidad—. Una vez identificado ese patrón, también se
-conservan pacientes de la misma página que solo tengan nombre.
+```powershell
+hospital-ocr --output data/output/pacientes_consolidados.xlsx --force
+```
 
-Las superposiciones de auditoría de las cuadrículas aceptadas se guardan en
-`data/interim/grids/`. Si las líneas son débiles, incompletas o la confianza no
-alcanza el umbral, el procesamiento continúa con la agrupación semántica y
-geométrica anterior.
+Elegir modo OCR:
 
-En documentos sin cuadrícula, si el OCR inicial cubre pocos renglones, se
-activa un segundo pase para escritura manuscrita. Los renglones se detectan por
-concentración de trazos, se amplían y se leen en dos ventanas horizontales
-solapadas; luego sus fragmentos se alinean de nuevo en una sola fila lógica.
-Los recortes y el resumen de cobertura se guardan en
-`data/interim/handwriting_rows/` para auditoría.
+```powershell
+hospital-ocr --ocr-mode auto
+hospital-ocr --ocr-mode handwritten
+hospital-ocr --ocr-mode printed
+```
 
-La interfaz permite seleccionar `Automático`, `Manuscrito` o `Impreso`.
-`Automático` refuerza celdas o renglones ausentes, estructurados o de baja
-confianza. `Manuscrito` usa la misma estrategia con un umbral más sensible.
-Cuando la selección cubriría casi toda una cuadrícula, se procesa completa para
-no degradar caracteres aislados al cambiar la composición de las filas.
-`Impreso` conserva una sola pasada global. En la línea de comandos se ofrecen
-los mismos modos mediante
-`--ocr-mode auto|handwritten|printed`.
+## Modos OCR
 
-Los resultados OCR se guardan en una caché local versionada por el contenido
-de la imagen y el modo seleccionado. Repetir una imagen sin cambios evita
-cargar el modelo y ejecutar nuevamente el OCR. Los tiempos de
-preprocesamiento, detección, OCR e interpretación se registran en
-`data/interim/tiempos.json`. Tanto la caché como ese diagnóstico permanecen
-fuera de Git porque pueden derivarse de documentos sensibles.
+- `auto`: modo recomendado. Ejecuta OCR global y refuerza celdas o renglones cuando detecta baja cobertura, campos estructurados o baja confianza. El refuerzo solo se acepta si mejora calidad y conserva cobertura.
+- `handwritten`: intenta refuerzo con mayor sensibilidad para listas manuscritas. Si el refuerzo empeora el resultado, se conserva el OCR global.
+- `printed`: usa una sola pasada global. Es util para documentos impresos o cuando se quiere evitar el refuerzo.
 
-`Plantilla` es una vista automática protegida con 1.000 filas enlazadas mediante fórmulas tradicionales. Los cambios realizados en `Pacientes` se reflejan al recalcular el libro. El archivo se configura para recalcular al abrirse y no se genera un CSV adicional.
+Los resultados OCR se guardan en cache por contenido de imagen, modo OCR y version de politica. Si cambia la politica OCR, la cache vieja se ignora automaticamente.
 
-`Pacientes` se entrega como tabla con filtros. `sexo`, `unidad_edad` —mostrada
-como `Unidad de edad` en la interfaz—, `especialidad` y `estado_revision` tienen
-listas desplegables. Las filas pendientes y los duplicados se resaltan mediante
-formato condicional.
+## Estructura del Excel
 
-La cédula es el criterio principal para fusionar apariciones del mismo paciente
-dentro de un centro. Cuando no está disponible, solo se fusionan registros con
-nombre y edad exactos y sin conflictos de sexo o procedencia. Las coincidencias
-aproximadas permanecen separadas y pasan a revisión.
+El archivo generado contiene:
 
-En `Pacientes`, `estado_duplicado` distingue registros únicos, posibles duplicados y duplicados consolidados. `detalle_duplicado` identifica las filas relacionadas y explica la coincidencia. Los posibles duplicados se resaltan en naranja y los consolidados en azul.
+- `Pacientes`: hoja principal editable, con una fila por paciente consolidado.
+- `Plantilla`: vista protegida con las columnas finales `nombre`, `apellido`, `cedula`, `centro` y `edad_sector`.
+- `Diccionario`: descripcion de cada columna, tipo de dato, valores permitidos y ejemplos.
 
-`edad` y `unidad_edad` se conservan por separado en las hojas internas para distinguir años, meses y días. En `Plantilla` se combinan dentro de `edad_sector`.
+Ejemplo de la hoja `Pacientes`:
 
-Cada palabra de `nombre_completo` se contrasta con los catálogos de nombres y apellidos. `nombre` y `apellido` solo se completan cuando la confianza es al menos 85% y existe una diferencia clara frente a otras separaciones posibles. Los casos ambiguos quedan vacíos y pendientes de revisión.
+![Hoja Pacientes del Excel generado](docs/examples/fake_pacientes.png)
 
-Las procedencias y especialidades también comparan aliases en una representación
-compacta para tolerar espacios insertados o eliminados por el OCR. Las
-coincidencias más largas y específicas tienen prioridad sobre aliases parciales.
-Esta corrección de espacios no se aplica automáticamente a nombres personales.
-Dentro de una columna confirmada como procedencia, una coincidencia OCR más
-tolerante se acepta solamente cuando el mejor lugar del catálogo supera el
-umbral contextual y aventaja claramente al segundo candidato. El valor canónico
-se exporta y la normalización queda indicada para revisión.
+Columnas importantes en `Pacientes`:
 
-En una columna confirmada como sexo, `F` y `M` tienen prioridad. `H` se
-normaliza a `M`; las confusiones OCR `T`, `E` o `P` se interpretan como `F` y
-`N` como `M`, siempre marcadas para revisión. Si aparecen valores incompatibles
-como `F` y `M`, el campo queda vacío. En todos los casos
-`linea_ocr_original` conserva la fila reconocida sin modificar.
+- `estado_revision`: `Pendiente`, `No requerido` o `Revisado`.
+- `observaciones`: motivos de revision, conflictos o notas clinicas extraidas.
+- `estado_duplicado`: `Unico`, `Posible duplicado` o `Duplicado consolidado`.
+- `detalle_duplicado`: explica con que paciente coincide y por que.
+- `imagenes_origen`: imagenes donde aparecio el paciente.
+- `linea_ocr_original`: texto OCR original usado como evidencia.
+- `confianza_*`: confianza separada para OCR, nombre, cedula, edad, procedencia y especialidad.
 
-La hoja `Pacientes` incluye confianzas separadas para nombre, cédula, edad,
-procedencia y especialidad, además de la evidencia usada para clasificar cada
-campo. La confianza OCR sigue representando solamente la calidad del texto
-reconocido.
+La hoja `Plantilla` se alimenta desde `Pacientes`. Haz las correcciones en `Pacientes` y abre/recalcula el libro para que `Plantilla` refleje los cambios.
 
-Los índices iniciales de filas numeradas se descartan antes de analizar nombre
-y edad. Fuera de una columna identificada explícitamente como procedencia, un
-lugar solo se completa cuando coincide con `config/lugares.csv`; el texto
-restante no se acepta automáticamente como procedencia. Dentro de una columna
-explícita se conserva el valor desconocido, marcado para revisión.
+Ejemplo de la hoja `Plantilla`:
 
-Las columnas intermedias que no forman parte de la salida, como `Cama`,
-`Afiliación` y `Diagnóstico`, se incluyen al calcular los límites de la tabla y
-luego se ignoran. También se detectan como separadores neutrales los encabezados
-desconocidos que estén geométricamente alineados con el membrete, incluso cuando
-la fotografía esté inclinada. De este modo, el contenido de una columna nueva
-no invade las columnas adyacentes que sí se exportan.
+![Hoja Plantilla del Excel generado](docs/examples/fake_plantilla.png)
 
-`estado_revision` muestra `Pendiente` cuando el registro necesita verificación y `No requerido` cuando no presenta alertas. La separación entre nombres y apellidos, los datos ausentes y las coincidencias dudosas siempre deben revisarse antes de utilizar la hoja `Plantilla`.
+## Revision Humana
 
-> Las imágenes y los resultados pueden contener datos médicos sensibles y están excluidos del repositorio.
+El sistema no reemplaza la revision humana. Antes de usar la hoja `Plantilla`, revisa especialmente:
+
+- Filas con `estado_revision = Pendiente`.
+- Filas con `estado_duplicado = Posible duplicado`.
+- Registros sin cedula.
+- Nombres o apellidos vacios.
+- Procedencias o especialidades dudosas.
+- Registros con observaciones o conflictos.
+
+Las coincidencias aproximadas de nombres no se fusionan automaticamente. Se marcan como posibles duplicados para que una persona decida.
+
+## Catalogos Configurables
+
+Los catalogos viven en `config/`:
+
+- `centros.csv`: relacion entre carpeta y nombre oficial del centro.
+- `lugares.csv`: aliases de ciudades, estados, sectores, instituciones y procedencias.
+- `especialidades.csv`: aliases de especialidades y areas.
+- `nombres_comunes.csv`: nombres frecuentes para separar nombres/apellidos y corregir algunos errores OCR.
+- `apellidos_comunes.csv`: apellidos frecuentes.
+
+Cuando agregues aliases, procura usar terminos especificos y revisar que no creen coincidencias ambiguas.
+
+## Evaluacion con Imagenes de Prueba
+
+El corpus privado de evaluacion se guarda en `data/evaluation/test_images/`. Cada imagen debe tener un CSV con el mismo nombre base, codificado en UTF-8 y separado por punto y coma.
+
+Validar estructura sin ejecutar OCR:
+
+```powershell
+hospital-ocr-evaluate data/evaluation/test_images --validate-only
+```
+
+Ejecutar evaluacion en modo automatico:
+
+```powershell
+hospital-ocr-evaluate data/evaluation/test_images --ocr-mode auto
+```
+
+Evaluar solo algunas imagenes:
+
+```powershell
+hospital-ocr-evaluate data/evaluation/test_images --ocr-mode auto --only test_image_8 --only test_image_17
+```
+
+Recalcular metricas desde predicciones existentes sin repetir OCR:
+
+```powershell
+hospital-ocr-evaluate data/evaluation/test_images --from-predictions data/evaluation/test_images/results/predicciones
+```
+
+Los resultados incluyen resumen JSON, metricas por imagen/campo, diferencias, predicciones y artefactos OCR.
+
+## Directorios
+
+- `src/hospital_ocr/`: codigo fuente del pipeline.
+- `src/hospital_ocr/table_extraction/`: deteccion y parsing de tablas.
+- `tests/`: pruebas automatizadas.
+- `config/`: catalogos editables.
+- `data/input/images/`: imagenes de entrada para CLI, excluidas de Git.
+- `data/interim/`: preprocesamiento, OCR, auditoria y sesiones web, excluido de Git.
+- `data/output/`: Excel generados, excluidos de Git.
+- `data/evaluation/`: corpus privado y resultados de evaluacion, excluido de Git.
+- `.cache/paddlex/`: modelos y cache OCR local, excluido de Git.
+
+## Privacidad
+
+Las imagenes pueden contener datos medicos sensibles. Por eso el repositorio ignora:
+
+- Imagenes de entrada.
+- Corpus de evaluacion.
+- Resultados OCR.
+- Archivos intermedios.
+- Excel finales.
+- Cache local.
+
+No subas al repositorio archivos con datos reales de pacientes.
+
+## Desarrollo
+
+Ejecutar pruebas:
+
+```powershell
+python -m pytest -q
+```
+
+Ejecutar solo pruebas de modos OCR:
+
+```powershell
+python -m pytest tests/test_pipeline_modes.py -q
+```
+
+Ejecutar solo pruebas de consolidacion:
+
+```powershell
+python -m pytest tests/test_consolidation.py -q
+```
+
+## Limitaciones Conocidas
+
+- El OCR puede fallar con texto muy borroso, inclinado o manuscrito irregular.
+- Los modos `auto` y `handwritten` pueden tardar mas porque prueban refuerzos por celda o renglon.
+- La separacion entre nombres y apellidos depende de catalogos y confianza minima.
+- Procedencias fuera del catalogo pueden quedar vacias o pendientes.
+- Los posibles duplicados requieren revision humana.
+
+## Fuente Inicial del Catalogo de Centros
+
+El catalogo parte de hospitales y centros de referencia de Venezuela. Se tomo como base la lista reproducida en el Plan intersectorial de preparacion y atencion a la COVID-19 de Naciones Unidas en Venezuela, paginas 31 a 33, y se agregaron centros identificados para el proyecto. Es una lista operativa, no un ranking de calidad ni un directorio exhaustivo.

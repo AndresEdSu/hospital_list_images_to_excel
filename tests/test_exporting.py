@@ -56,6 +56,7 @@ def test_excel_contains_required_sheets_and_template(tmp_path: Path) -> None:
     template_sheet = workbook["Plantilla"]
     assert template_sheet.max_row == 1001
     assert template_sheet["A2"].value.startswith("=IF(Pacientes!")
+    assert 'IF(Pacientes!$G2="","",Pacientes!$G2)' in template_sheet["C2"].value
     assert "Pacientes!" in template_sheet["E2"].value
     assert template_sheet["A1"].comment is not None
     assert template_sheet.protection.sheet is True

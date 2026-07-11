@@ -168,7 +168,8 @@ def _link_template_sheet(workbook: Any) -> None:
         for target_column, source_column in mappings.items():
             template[f"{target_column}{row}"] = (
                 f'=IF(Pacientes!${id_column}{row}="","",'
-                f'Pacientes!${source_column}{row})'
+                f'IF(Pacientes!${source_column}{row}="","",'
+                f'Pacientes!${source_column}{row}))'
             )
         template[f"E{row}"] = (
             f'=IF(Pacientes!${id_column}{row}="","",'
