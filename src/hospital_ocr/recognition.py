@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,29 +24,104 @@ from hospital_ocr.ocr_refinement import (
 from hospital_ocr.pipeline_types import OcrMode
 
 
+REFINEMENT_QUALITY_MARGIN = 0.01
+REFINEMENT_COVERAGE_TOLERANCE = 0.001
+DOCUMENT_RE = re.compile(
+    r"(?<!\d)(?:[VEve]\s*[-.]?\s*)?\d(?:[.,\-]?\d){5,10}(?!\d)"
+)
+WORD_RE = re.compile(r"[A-Za-z0-9]{2,}")
+
+
+def _ocr_quality_score(lines: list[OcrLine]) -> float:
+    useful = [line for line in lines if line.text.strip()]
+    if not useful:
+        return 0.0
+    total_characters = sum(max(1, len(line.text.strip())) for line in useful)
+    confidence = sum(
+        line.score * max(1, len(line.text.strip())) for line in useful
+    ) / total_characters
+    text = " ".join(line.text.strip() for line in useful)
+    words = WORD_RE.findall(text)
+    documents = DOCUMENT_RE.findall(text)
+    semantic_bonus = min(0.14, len(words) * 0.004 + len(documents) * 0.04)
+    volume_bonus = min(0.08, len(text) / 700)
+    strange_characters = sum(
+        not (character.isalnum() or character.isspace() or character in ".-#,/")
+        for character in text
+    )
+    strange_penalty = min(0.20, strange_characters / max(1, len(text)))
+    return confidence + semantic_bonus + volume_bonus - strange_penalty
+
+
+def _choose_refined_ocr(
+    initial_lines: list[OcrLine],
+    refined_lines: list[OcrLine],
+    *,
+    coverage_before: float | None,
+    coverage_after: float | None,
+) -> tuple[list[OcrLine], dict[str, Any], str]:
+    quality_before = _ocr_quality_score(initial_lines)
+    quality_after = _ocr_quality_score(refined_lines)
+    coverage_preserved = (
+        coverage_before is None
+        or coverage_after is None
+        or coverage_after + REFINEMENT_COVERAGE_TOLERANCE >= coverage_before
+    )
+    quality_improved = quality_after >= quality_before + REFINEMENT_QUALITY_MARGIN
+    accepted = coverage_preserved and quality_improved
+    if accepted:
+        reason = "mejora_calidad_y_cobertura"
+    elif not coverage_preserved:
+        reason = "cobertura_menor"
+    else:
+        reason = "calidad_no_mejora"
+    decision = {
+        "aceptado": accepted,
+        "motivo": reason,
+        "calidad_antes": round(quality_before, 4),
+        "calidad_despues": round(quality_after, 4),
+        "margen_calidad": round(quality_after - quality_before, 4),
+        "cobertura_preservada": coverage_preserved,
+    }
+    if coverage_before is not None:
+        decision["cobertura_antes"] = round(coverage_before, 4)
+    if coverage_after is not None:
+        decision["cobertura_despues"] = round(coverage_after, 4)
+    if accepted:
+        return refined_lines, decision, ""
+    return (
+        initial_lines,
+        decision,
+        "El OCR reforzado no mejoro cobertura/calidad; se uso OCR global.",
+    )
+
+
 def row_audit(
     *,
     mode: OcrMode,
     rows: list[TextRow],
     lines: list[OcrLine],
     coverage_before: float | None,
+    coverage_after: float | None = None,
     boundary_source: str,
     fallback_reason: str = "",
     grid: TableGrid | None = None,
-    refinement: dict[str, int | float | bool] | None = None,
+    refinement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if grid is not None:
+    if coverage_after is not None:
+        measured_coverage_after = coverage_after
+    elif grid is not None:
         covered_grid_rows = {
             row
             for line in lines
             if (row := grid.row_for_box(line.box)) is not None
         }
-        coverage_after = len(covered_grid_rows) / max(
+        measured_coverage_after = len(covered_grid_rows) / max(
             1,
             len(grid.horizontal) - 1,
         )
     else:
-        coverage_after = row_ocr_coverage(lines, rows) if rows else None
+        measured_coverage_after = row_ocr_coverage(lines, rows) if rows else None
     return {
         "modo": mode,
         "procesamiento_reforzado": bool(rows),
@@ -57,8 +133,8 @@ def row_audit(
             else None
         ),
         "cobertura_despues": (
-            round(coverage_after, 4)
-            if coverage_after is not None
+            round(measured_coverage_after, 4)
+            if measured_coverage_after is not None
             else None
         ),
         "refuerzo": refinement or {},
@@ -134,13 +210,25 @@ def recognize_grid_image(
         if selected_cells
         else []
     )
-    lines = merge_grid_ocr(global_lines, refined_lines, grid)
+    candidate_lines = merge_grid_ocr(global_lines, refined_lines, grid)
+    coverage_before = grid_row_coverage(global_lines, grid)
+    coverage_after = grid_row_coverage(candidate_lines, grid)
+    lines, decision, fallback_reason = _choose_refined_ocr(
+        global_lines,
+        candidate_lines,
+        coverage_before=coverage_before,
+        coverage_after=coverage_after,
+    )
     return lines, row_audit(
         mode=mode,
         rows=rows,
         lines=lines,
-        coverage_before=grid_row_coverage(global_lines, grid),
+        coverage_before=coverage_before,
+        coverage_after=(
+            coverage_after if decision["aceptado"] else coverage_before
+        ),
         boundary_source="cuadrícula",
+        fallback_reason=fallback_reason,
         grid=grid,
         refinement={
             "celdas_totales": len(all_cells),
@@ -154,6 +242,7 @@ def recognize_grid_image(
                 len(selected_cells) == len(all_cells)
                 and selectively_requested < len(all_cells)
             ),
+            "decision": decision,
         },
     )
 
@@ -226,17 +315,29 @@ def recognize_image(
             if selected_rows
             else []
         )
-        lines = merge_row_ocr(
+        candidate_lines = merge_row_ocr(
             initial_lines,
             segmented_lines,
             selected_rows,
+        )
+        coverage_before = row_ocr_coverage(initial_lines, rows)
+        coverage_after = row_ocr_coverage(candidate_lines, rows)
+        lines, decision, fallback_reason = _choose_refined_ocr(
+            initial_lines,
+            candidate_lines,
+            coverage_before=coverage_before,
+            coverage_after=coverage_after,
         )
         return lines, row_audit(
             mode=mode,
             rows=selected_rows,
             lines=lines,
-            coverage_before=row_ocr_coverage(initial_lines, rows),
+            coverage_before=coverage_before,
+            coverage_after=(
+                coverage_after if decision["aceptado"] else coverage_before
+            ),
             boundary_source=boundary_source,
+            fallback_reason=fallback_reason,
             grid=grid,
             refinement={
                 "renglones_totales": len(rows),
@@ -245,6 +346,7 @@ def recognize_image(
                     len(selected_rows) / max(1, len(rows)),
                     4,
                 ),
+                "decision": decision,
             },
         )
 
@@ -276,13 +378,24 @@ def recognize_image(
         if selected_rows
         else []
     )
-    lines = merge_row_ocr(initial_lines, segmented_lines, selected_rows)
+    candidate_lines = merge_row_ocr(initial_lines, segmented_lines, selected_rows)
+    coverage_after = row_ocr_coverage(candidate_lines, rows)
+    lines, decision, fallback_reason = _choose_refined_ocr(
+        initial_lines,
+        candidate_lines,
+        coverage_before=coverage_before,
+        coverage_after=coverage_after,
+    )
     return lines, row_audit(
         mode=mode,
         rows=selected_rows,
         lines=lines,
         coverage_before=coverage_before,
+        coverage_after=(
+            coverage_after if decision["aceptado"] else coverage_before
+        ),
         boundary_source="renglones",
+        fallback_reason=fallback_reason,
         refinement={
             "renglones_totales": len(rows),
             "renglones_seleccionados": len(selected_rows),
@@ -290,5 +403,6 @@ def recognize_image(
                 len(selected_rows) / max(1, len(rows)),
                 4,
             ),
+            "decision": decision,
         },
     )

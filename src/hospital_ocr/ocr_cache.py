@@ -10,7 +10,7 @@ from hospital_ocr.models import OcrLine
 from hospital_ocr.pipeline_types import OcrMode
 
 
-OCR_RESULT_CACHE_VERSION = "selective-refinement-v5"
+OCR_RESULT_CACHE_VERSION = "refinement-policy-v6"
 
 
 @dataclass(frozen=True)
